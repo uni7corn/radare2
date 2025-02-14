@@ -15,8 +15,7 @@ static void r_bin_dbgitem_free(RBinDbgItem *di) {
 	}
 }
 
-// R2_600 - make this api public
-static RBinDbgItem *r_bin_dbgitem_at(RBin *bin, ut64 addr) {
+R_API RBinDbgItem *r_bin_dbgitem_at(RBin *bin, ut64 addr) {
 	r_strf_var (key, 64, "0x%"PFMT64x, addr); // TODO: use sdb_itoa because its faster
 	char *data = sdb_get (bin->cur->sdb_addrinfo, key, 0);
 	if (data) {
@@ -65,7 +64,7 @@ static bool addr2line_from_sdb(RBin *bin, ut64 addr, char *file, int len, int *l
 	return false;
 }
 
-// XXX this api must return a struct instead of pa
+// XXX R2_600 - this api must return a struct instead of pa
 // R_API RBinDwarfRow *r_bin_addr2line(RBin *bin, ut64 addr) {}
 R_API bool r_bin_addr2line(RBin *bin, ut64 addr, char *file, int len, int *line, int *column) {
 	R_RETURN_VAL_IF_FAIL (bin, false);
@@ -102,7 +101,7 @@ static RBinDbgItem *r_bin_dbgitem_api(RBin *bin, ut64 addr) {
 		if (cp && cp->dbginfo && cp->dbginfo->get_line) {
 			if (cp->dbginfo->get_line (bin->cur, addr, file, len, &line, &column)) {
 				RBinDbgItem *di = R_NEW0 (RBinDbgItem);
-				di->file = file;
+				di->file = strdup (file);
 				di->address = addr;
 				di->line = line;
 				di->column = column;
@@ -130,13 +129,11 @@ R_API R_NULLABLE char *r_bin_addr2text(RBin *bin, ut64 addr, int origin) {
 	}
 	char *res = NULL;
 	char *filename = strdup (di->file);
-#if R2_USE_NEW_ABI
 	if (R_STR_ISNOTEMPTY (bin->srcdir_base) && r_str_startswith (filename, bin->srcdir_base)) {
 		char *fn = strdup (filename + strlen (bin->srcdir_base));
 		free (filename);
 		filename = fn;
 	}
-#endif
 	char *basename = strdup (r_file_basename (di->file));
 #if __APPLE__
 	// early optimization because mac's home is slow

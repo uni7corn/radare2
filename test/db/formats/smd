@@ -113,9 +113,9 @@ RUN
 
 NAME=sega megadrive rom entrypoint
 FILE=bins/smd/LiquidSpaceDodgerV3.bin
-CMDS=ie~vadd
+CMDS=ie=~vadd
 EXPECT=<<EOF
-vaddr=0x00000200 paddr=0x00000200 haddr=-1 type=program
+paddr=0x00000200 vaddr=0x00000200 haddr=-1 type=program
 EOF
 RUN
 
@@ -135,7 +135,6 @@ e bin.str.filter=U
 izz
 EOF
 EXPECT=<<EOF
-[Strings]
 nth paddr      vaddr      len size section type  string
 -------------------------------------------------------
 0   0x00000100 0x00000100 160 161          ascii SEGA GENESIS    (C)SEGA 1995.MARCART. BRADESCO                                  CART. BRADESCO                                  GM 00000001-00W`J

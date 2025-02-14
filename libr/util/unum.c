@@ -98,12 +98,10 @@ R_API void r_num_minmax_swap_i(int *a, int *b) {
 
 R_API RNum *r_num_new(RNumCallback cb, RNumCallback2 cb2, void *ptr) {
 	RNum *num = R_NEW0 (RNum);
-	if (num) {
-		num->value = 0LL;
-		num->callback = cb;
-		num->cb_from_value = cb2;
-		num->userptr = ptr;
-	}
+	num->value = 0LL;
+	num->callback = cb;
+	num->cb_from_value = cb2;
+	num->userptr = ptr;
 	return num;
 }
 
@@ -911,3 +909,16 @@ R_API char *r_num_list_join(RList *str, const char *sep) {
 	}
 	return r_strbuf_drain (sb);
 }
+
+/* Returns the number that has bits + 1 least significant bits set. */
+R_API ut64 r_num_genmask(int bits) {
+	ut64 m = UT64_MAX;
+	if (bits > 0 && bits < 64) {
+		m = (ut64)(((ut64)(2) << bits) - 1);
+		if (!m) {
+			m = UT64_MAX;
+		}
+	}
+	return m;
+}
+

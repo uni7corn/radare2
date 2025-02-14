@@ -271,7 +271,7 @@ R_API bool r_core_visual_esil(RCore *core, const char *input) {
 				free (res);
 				free (op_hex);
 			}
-			char *op = colorize_asm_string (core, r_asm_op_get_asm (&asmop), analopType, core->offset);
+			char *op = colorize_asm_string (core, asmop.mnemonic, analopType, core->offset);
 			r_cons_printf (Color_RESET"asm: %s\n"Color_RESET, op);
 			free (op);
 			expr = strdup (r_strbuf_get (&analop.esil));
@@ -426,7 +426,7 @@ R_API bool r_core_visual_esil(RCore *core, const char *input) {
 			r_cons_clear00 ();
 			r_cons_printf (
 			"VdE?: Visual Esil Debugger Help (aev):\n\n"
-			" q     - quit the bit editor\n"
+			" q     - quit the esil debugger\n"
 			" h/r   - reset / go back (reinitialize esil state)\n"
 			" s     - esil step in\n"
 			" S     - esil step over\n"
@@ -435,6 +435,7 @@ R_API bool r_core_visual_esil(RCore *core, const char *input) {
 			" j/k   - next/prev instruction\n"
 			" n/p   - go next/prev instruction\n"
 			" =     - enter cmd.vprompt command\n"
+			" !     - toggle all bits\n"
 			" :     - enter command\n");
 			r_cons_flush ();
 			r_cons_any_key (NULL);
@@ -474,6 +475,8 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 	const int nbits = sizeof (ut64) * 8;
 	bool colorBits = false;
 	int analopType;
+	ut8 yankBuffer[8] = {0};
+	int yankSize = 0;
 	int i, j, x = 0;
 	RAnalOp analop;
 	ut8 buf[sizeof (ut64)];
@@ -486,6 +489,7 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 	if (core->print->cur != -1) {
 		cur = core->print->cur;
 	}
+	int wordsize = 1;
 	memcpy (buf, core->block + cur, sizeof (ut64));
 	for (;;) {
 		r_anal_op_init (&analop);
@@ -494,14 +498,36 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 		r_anal_op_set_bytes (&analop, core->offset + cur, buf, sizeof (ut64));
 		(void)r_anal_op (core->anal, &analop, core->offset, buf, sizeof (buf), R_ARCH_OP_MASK_ESIL | R_ARCH_OP_MASK_DISASM);
 		analopType = analop.type & R_ANAL_OP_TYPE_MASK;
-		r_cons_printf ("r2's bit editor: (=pfb 3b4b formatting)\n\n");
-		r_cons_printf ("adr: 0x%08"PFMT64x"\n"Color_RESET, core->offset + cur);
+		{
+			ut8 *o = core->block;
+			int bs = core->blocksize;
+			core->block = buf;
+			int stride = r_config_get_i (core->config, "hex.stride");
+			r_config_set_i (core->config, "hex.stride", 1);
+			core->blocksize = sizeof (buf);
+			char *s = r_core_cmd_str (core, "pri1");
+			core->block = o;
+			r_config_set_i (core->config, "hex.stride", stride);
+			core->blocksize = bs;
+			r_cons_print_at (s, 60, 1, 20, 12);
+			free (s);
+		}
+		r_cons_printf ("[0x08%"PFMT64x"]> Vd1 # r2's sprite / bit editor\n\n", core->offset + cur);
 		if (analop.bytes) {
 			char *op_hex = r_hex_bin2strdup (analop.bytes, analop.size);
 			char *res = r_print_hexpair (core->print, op_hex, -1);
 			r_cons_printf ("hex: %s\n"Color_RESET, res);
 			free (res);
 			free (op_hex);
+		}
+		{
+			if (analop.size <= 4) {
+				r_cons_printf ("nle: %d\n", r_read_le32 (buf));
+				r_cons_printf ("nbe: %d\n", r_read_be32 (buf));
+			} else {
+				r_cons_printf ("nle: %"PFMT64d"\n", r_read_le64 (buf));
+				r_cons_printf ("nbe: %"PFMT64d"\n", r_read_be64 (buf));
+			}
 		}
 		r_cons_printf ("len: %d\n", analop.size);
 		{
@@ -519,7 +545,25 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 			}
 		}
 		r_cons_printf (Color_RESET"esl: %s\n"Color_RESET, r_strbuf_get (&analop.esil));
-		r_cons_printf ("chr:");
+		r_cons_printf ("[w]:");
+		int nbyte = (x / 8);
+		char first = '/';
+		for (i = 0; i < 8; i++) {
+			if (i == 4) {
+				if (i < nbyte + 1) {
+					r_cons_printf ("  ");
+				} else if (i < nbyte + wordsize) {
+					r_cons_printf ("==");
+				}
+			}
+			if (i < nbyte) {
+				r_cons_printf ("         ");
+			} else if (i < nbyte + wordsize) {
+				r_cons_printf ("%c========", first);
+				first = '=';
+			}
+		}
+		r_cons_printf ("\\ word=%d\nchr:", wordsize);
 		for (i = 0; i < 8; i++) {
 			const ut8 *byte = buf + i;
 			char ch = IS_PRINTABLE (*byte)? *byte: '?';
@@ -632,19 +676,8 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 			r_core_cmd0 (core, vi);
 		}
 		r_cons_newline ();
-		{
-			ut8 *o = core->block;
-			int bs = core->blocksize;
-			core->block = buf;
-			int stride = r_config_get_i (core->config, "hex.stride");
-			r_config_set_i (core->config, "hex.stride", 1);
-			core->blocksize = sizeof (buf);
-			r_core_cmd_call (core, "pri1");
-			core->block = o;
-			r_config_set_i (core->config, "hex.stride", stride);
-			core->blocksize = bs;
-		}
-		r_cons_visual_flush ();
+		//r_cons_visual_flush ();
+		r_cons_flush ();
 
 		int ch = r_cons_readchar ();
 		if (ch == -1 || ch == 4) {
@@ -656,6 +689,30 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 		// input
 		r_cons_newline ();
 		switch (ch) {
+		case 'w':
+			wordsize += 1;
+			if (wordsize > 8) {
+				wordsize = 1;
+			}
+			break;
+		case 'W':
+			wordsize -= 1;
+			if (wordsize < 1) {
+				wordsize = 1;
+			}
+			break;
+		case 'e': // swap endian
+			{
+				ut8 a[8];
+				memcpy (a, buf, sizeof (a));
+				const int nbyte = x / 8;
+				const int last = R_MIN (nbyte + wordsize, 8);
+				int i;
+				for (i = nbyte; i < last; i++) {
+					buf[i] = a[last - 1 - i + nbyte];
+				}
+			}
+			break;
 		case 'Q':
 		case 'q':
 			if (analop.bytes) {
@@ -666,14 +723,31 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 				free (op_hex);
 			}
 			return false;
+		case '!':
+			{
+				const int nbyte = x / 8;
+				const int last = R_MIN (nbyte + wordsize, 8);
+				int i;
+				for (i = nbyte; i < last; i++) {
+					*(buf + i) = ~*(buf + i);
+				}
+			}
+			break;
 		case 'H':
 			{
 				const int y = R_MAX (x - 8, 0);
 				x = y - y % 8;
 			}
 			break;
+		case 'Z':
+			{
+				const int y = R_MAX (x - 8, 0);
+				x = y - y % 8;
+			}
+			break;
+			break;
 		case 'L':
-		case 9:
+		case 9: // TAB
 			{
 				const int y = R_MIN (x + 8, nbits - 8);
 				x = y - y % 8;
@@ -705,10 +779,25 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 			}
 			break;
 		case '>':
-			buf[x/8] = rotate_nibble (buf [(x / 8)], -1);
+			{
+				// buf[x / 8] = rotate_nibble (buf [(x / 8)], -1);
+				const int nbyte = x / 8;
+				int last = R_MIN (nbyte + wordsize, 8);
+				for (i = nbyte; i < last; i++) {
+					buf[i] = rotate_nibble (buf [i], -1);
+				}
+			}
 			break;
 		case '<':
-			buf[x / 8] = rotate_nibble (buf [(x / 8)], 1);
+			// buf[x / 8] = rotate_nibble (buf [(x / 8)], 1);
+			{
+				// buf[x / 8] = rotate_nibble (buf [(x / 8)], -1);
+				const int nbyte = x / 8;
+				int last = R_MIN (nbyte + wordsize, 8);
+				for (i = nbyte; i < last; i++) {
+					buf[i] = rotate_nibble (buf [i], 1);
+				}
+			}
 			break;
 		case 'i':
 			{
@@ -742,10 +831,23 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 		}
 		break;
 		case '+':
-			buf[(x/8)]++;
+			{
+				const int nbyte = x / 8;
+				int last = R_MIN (nbyte + wordsize, 8);
+				for (i = nbyte; i < last; i++) {
+					buf[i]++;
+				}
+			}
 			break;
 		case '-':
-			buf[(x / 8)]--;
+			//buf[(x / 8)]--;
+			{
+				const int nbyte = x / 8;
+				int last = R_MIN (nbyte + wordsize, 8);
+				for (i = nbyte; i < last; i++) {
+					buf[i]--;
+				}
+			}
 			break;
 		case 'h':
 			x = R_MAX (x - 1, 0);
@@ -756,6 +858,28 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 		case 'b':
 			bitsInLine = !bitsInLine;
 			break;
+		case 'y': // yank
+			{
+				const int nbyte = x / 8;
+				const int last = R_MIN (nbyte + wordsize, 8);
+				yankSize = last - nbyte + 1;
+				int i;
+				for (i = nbyte; i < last; i++) {
+					yankBuffer[i - nbyte] = buf[i];
+				}
+			}
+			break;
+		case 'Y': // paste
+			{
+				const int nbyte = x / 8;
+				const int last = R_MIN (nbyte + wordsize, yankSize + nbyte);
+				int i;
+				int j = 0;
+				for (i = nbyte; i < last; i++) {
+					buf[i] = yankBuffer[j++];
+				}
+			}
+			break;
 		case '?':
 			r_cons_clear00 ();
 			r_cons_printf (
@@ -763,13 +887,17 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 			" q     - quit the bit editor\n"
 			" R     - randomize color palette\n"
 			" b     - toggle bitsInLine\n"
+			" e     - toggle endian of the selected word\n"
 			" j/k   - toggle bit value (same as space key)\n"
 			" J/K   - next/prev instruction (so+1,so-1)\n"
 			" h/l   - select next/previous bit\n"
+			" w/W   - increment 2 or 4 the wordsize\n"
+			" y/Y   - yank/paste selected bits\n"
 			" +/-   - increment or decrement byte value\n"
 			" </>   - rotate left/right byte value\n"
 			" i     - insert numeric value of byte\n"
 			" =     - set cmd.vprompt command\n"
+			" !     - toggle all the bits\n"
 			" :     - run r2 command\n");
 			r_cons_flush ();
 			r_cons_any_key (NULL);
@@ -779,7 +907,7 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 			char cmd[1024];
 			r_cons_show_cursor (true);
 			r_cons_set_raw (0);
-			cmd[0]='\0';
+			cmd[0] = '\0';
 			r_line_set_prompt (":> ");
 			if (r_cons_fgets (cmd, sizeof (cmd), 0, NULL) < 0) {
 				cmd[0] = '\0';
@@ -1178,6 +1306,7 @@ R_API bool r_core_visual_hudstuff(RCore *core) {
 			*p = 0;
 		}
 		addr = r_num_get (NULL, res);
+		r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
 		r_core_seek (core, addr, true);
 		free (res);
 	}
@@ -1366,7 +1495,7 @@ static void *show_class(RCore *core, int mode, int *idx, RBinClass *_c, const ch
 				}
 			}
 
-			char *mflags = r_core_bin_attr_tostring (m->attr, false);
+			char *mflags = r_core_bin_attr_tostring (core, m->attr, false);
 			if (show_color) {
 				if (r_str_startswith (name, _cname)) {
 					name += strlen (_cname);
@@ -3348,7 +3477,7 @@ static ut64 var_variables_show(RCore* core, int idx, int *vindex, int show, int 
 						i == *vindex ? "* ":"  ",
 						var->delta < 0? "var": "arg",
 						var->type, var->name,
-						core->anal->reg->name[R_REG_NAME_BP],
+						r_reg_alias_getname (core->anal->reg, R_REG_ALIAS_BP),
 						(var->kind == 'v')?"-":"+",
 						var->delta);
 				break;
@@ -3357,7 +3486,7 @@ static ut64 var_variables_show(RCore* core, int idx, int *vindex, int show, int 
 						i == *vindex ? "* ":"  ",
 						var->delta < 0? "var": "arg",
 						var->type, var->name,
-						core->anal->reg->name[R_REG_NAME_SP],
+						r_reg_alias_getname (core->anal->reg, R_REG_ALIAS_SP),
 						(var->kind == 'v')?"-":"+",
 						var->delta + fcn->maxstack);
 				break;
@@ -4285,7 +4414,7 @@ onemoretime:
 			RAnalOp *op = r_core_anal_op (core, off, R_ARCH_OP_MASK_BASIC);
 			if (op) {
 				if (op->jump != UT64_MAX) {
-					RFlagItem *item = r_flag_get_i (core->flags, op->jump);
+					RFlagItem *item = r_flag_get_in (core->flags, op->jump);
 					if (item) {
 						const char *ptr = r_str_lchr (item->name, '.');
 						if (ptr) {
@@ -4334,7 +4463,7 @@ onemoretime:
 				}
 			} else if (tgt_addr != UT64_MAX) {
 				RAnalFunction *fcn = r_anal_get_function_at (core->anal, tgt_addr);
-				RFlagItem *f = r_flag_get_i (core->flags, tgt_addr);
+				RFlagItem *f = r_flag_get_in (core->flags, tgt_addr);
 				if (fcn) {
 					q = r_str_newf ("?i Rename function %s to;afn `yp` 0x%"PFMT64x,
 						fcn->name, tgt_addr);
@@ -4360,7 +4489,7 @@ onemoretime:
 	}
 	case 'C':
 		{
-			RFlagItem *item = r_flag_get_i (core->flags, off);
+			RFlagItem *item = r_flag_get_in (core->flags, off);
 			if (item) {
 				char cmd[128];
 				r_cons_show_cursor (true);
@@ -4379,7 +4508,7 @@ onemoretime:
 		break;
 	case '$':
 		{
-			RFlagItem *item = r_flag_get_i (core->flags, off);
+			RFlagItem *item = r_flag_get_in (core->flags, off);
 			if (item) {
 				char cmd[128];
 				r_cons_printf ("Current flag size is: %" PFMT64d "\n", item->size);
@@ -4719,12 +4848,12 @@ R_API void r_core_visual_colors(RCore *core) {
 #define CASE_RGB(x,X,y) \
 	case x:if ((y) > 0x00) { (y)--; } break;\
 	case X:if ((y) < 0xff) { (y)++; } break;
-		CASE_RGB ('R','r',rcolor.r);
-		CASE_RGB ('G','g',rcolor.g);
-		CASE_RGB ('B','b',rcolor.b);
-		CASE_RGB ('E','e',rcolor.r2);
-		CASE_RGB ('F','f',rcolor.g2);
-		CASE_RGB ('V','v',rcolor.b2);
+		CASE_RGB ('R', 'r', rcolor.r);
+		CASE_RGB ('G', 'g', rcolor.g);
+		CASE_RGB ('B', 'b', rcolor.b);
+		CASE_RGB ('E', 'e', rcolor.r2);
+		CASE_RGB ('F', 'f', rcolor.g2);
+		CASE_RGB ('V', 'v', rcolor.b2);
 		case 'Q':
 		case 'q':
 			free (res);

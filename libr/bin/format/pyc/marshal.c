@@ -1174,7 +1174,10 @@ fail:
 	free (section);
 fail2:
 	free (prefix);
-	free (symbol);
+	if (symbol) {
+		free (symbol->name);
+		free (symbol);
+	}
 	return false;
 }
 

@@ -8,11 +8,29 @@
 
 R_LIB_VERSION (r_asm);
 
+static RAsmPlugin *asm_static_plugins[] =
+	{ R_ASM_STATIC_PLUGINS };
+
 static const char *directives[] = {
 	".include", ".error", ".warning",
 	".echo", ".if", ".ifeq", ".endif",
 	".else", ".set", ".get", ".extern", NULL
 };
+
+R_API bool r_asm_plugin_add(RAsm *a, RAsmPlugin *foo) {
+	R_RETURN_VAL_IF_FAIL (a && foo, false);
+	RAsmPluginSession *aps = R_NEW0 (RAsmPluginSession);
+	aps->rasm = a;
+	aps->plugin = foo;
+	aps->data = NULL; // to be used by the plugin
+	r_list_append (a->sessions, aps);
+	return true;
+}
+
+R_API bool r_asm_plugin_remove(RAsm *a, RAsmPlugin *plugin) {
+	// TODO implement
+	return true;
+}
 
 /* pseudo.c - private api */
 static int r_asm_pseudo_align(RAsmCode *acode, RAnalOp *op, const char *input) {
@@ -36,19 +54,6 @@ static int r_asm_pseudo_string(RAnalOp *op, char *input, bool zero) {
 	r_anal_op_set_mnemonic (op, op->addr, input);
 	r_anal_op_set_bytes (op, op->addr, (const ut8*)input, len + 1);
 	return len;
-}
-
-static inline int r_asm_pseudo_bits(RAsm *a, const char *input) {
-	if (!(r_asm_set_bits (a, r_num_math (NULL, input)))) {
-		R_LOG_ERROR ("Unsupported value for .bits");
-		return -1;
-	}
-	return 0;
-}
-
-static inline bool r_asm_pseudo_org(RAsm *a, const char *input) {
-	r_asm_set_pc (a, r_num_math (NULL, input));
-	return true;
 }
 
 static inline int r_asm_pseudo_intN(RAsm *a, RAnalOp *op, char *input, int n) {
@@ -178,47 +183,17 @@ static inline int r_asm_pseudo_incbin(RAnalOp *op, char *input) {
 
 R_API RAsm *r_asm_new(void) {
 	RAsm *a = R_NEW0 (RAsm);
-	if (!a) {
-		return NULL;
-	}
 	a->codealign = 1;
 	a->dataalign = 1;
-	a->plugins = r_list_newf (NULL);
-	if (!a->plugins) {
-		free (a);
-		return NULL;
-	}
+	a->pseudo = false;
+	a->sessions = r_list_newf (free);
 	a->config = r_arch_config_new ();
 	a->parse = r_parse_new ();
+	size_t i;
+	for (i = 0; asm_static_plugins[i]; i++) {
+		r_asm_plugin_add (a, asm_static_plugins[i]);
+	}
 	return a;
-}
-
-// TODO must use the internal rparse api when both libraries are merged
-R_API bool r_asm_sub_names_input(RAsm *a, const char *f) {
-	R_RETURN_VAL_IF_FAIL (a && f, false);
-	if (!a->ifilter) {
-		a->ifilter = r_parse_new ();
-	}
-	if (!r_parse_use (a->ifilter, f)) {
-		r_parse_free (a->ifilter);
-		a->ifilter = NULL;
-		return false;
-	}
-	return true;
-}
-
-// TODO must use the internal rparse api when both libraries are merged
-R_API bool r_asm_sub_names_output(RAsm *a, const char *f) {
-	R_RETURN_VAL_IF_FAIL (a && f, false);
-	if (!a->ofilter) {
-		a->ofilter = r_parse_new ();
-	}
-	if (!r_parse_use (a->ofilter, f)) {
-		r_parse_free (a->ofilter);
-		a->ofilter = NULL;
-		return false;
-	}
-	return true;
 }
 
 R_API void r_asm_free(RAsm *a) {
@@ -226,27 +201,116 @@ R_API void r_asm_free(RAsm *a) {
 		return;
 	}
 	// r_unref (a->config);
-	if (a->plugins) {
-		r_list_free (a->plugins);
-		a->plugins = NULL;
-	}
-	r_parse_free (a->parse);
 	r_unref (a->config);
 	r_syscall_free (a->syscall);
 	sdb_free (a->pair);
 	ht_pp_free (a->flags);
 	a->pair = NULL;
+	RListIter *iter;
+	RAsmPluginSession *aps;
+	r_list_foreach (a->sessions, iter, aps) {
+		RAsmParseFini fini = aps->plugin->fini;
+		if (fini) {
+			fini (aps);
+		}
+	}
+	r_list_free (a->sessions);
+	r_parse_free (a->parse);
 	free (a);
 }
 
 R_API void r_asm_set_user_ptr(RAsm *a, void *user) {
 	a->user = user;
+	a->parse->user = user;
 }
 
 R_API bool r_asm_use_assembler(RAsm *a, const char *name) {
 	R_RETURN_VAL_IF_FAIL (a && name, false);
 	// TODO not implemented
 	return false;
+}
+
+static char *predotname(const char *name) {
+	char *sname = strdup (name);
+	char *dot = strchr (sname, '.');
+	if (dot) {
+		*dot = 0;
+	}
+	return sname;
+}
+
+static void useparser(RAsm *a, RAsmPluginSession *aps) {
+	RAsmPlugin *h = aps->plugin;
+	if (a->cur) {
+		if (a->cur == aps) {
+			return;
+		}
+		if (h->init && !aps->data) {
+			h->init (aps);
+		}
+	}
+	a->cur = aps;
+}
+
+R_API bool r_asm_use_parser(RAsm *a, const char *name) {
+	R_RETURN_VAL_IF_FAIL (a && name, false);
+	if (r_str_startswith (name, "r2ghidra")) {
+		// This plugin uses asm.cpu as a hack, ignoring
+		return false;
+	}
+	// TODO: remove the alias workarounds because of missing pseudo plugins
+	if (r_str_startswith (name, "s390.")) {
+		name = "x86";
+	} else if (r_str_startswith (name, "loongarch")) {
+		name = "mips";
+	} else if (r_str_startswith (name, "blackfin")) {
+		name = "arm";
+	}
+
+	RListIter *iter;
+	RAsmPluginSession *aps;
+	r_list_foreach (a->sessions, iter, aps) {
+		RAsmPlugin *ap = aps->plugin;
+		if (!strcmp (ap->meta.name, name)) {
+			useparser (a, aps);
+			return true;
+		}
+	}
+	bool found = false;
+	if (strchr (name, '.')) {
+		char *sname = predotname (name);
+		r_list_foreach (a->sessions, iter, aps) {
+			RAsmPlugin *ap = aps->plugin;
+			char *shname = predotname (ap->meta.name);
+			found = !strcmp (shname, sname);
+			free (shname);
+			if (found) {
+				useparser (a, aps);
+				break;
+			}
+		}
+		free (sname);
+	}
+	if (!found) {
+		R_LOG_WARN ("Cannot find asm.parser for %s", name);
+		RAsmPlugin *pcur = R_UNWRAP3 (a, cur, plugin);
+		if (pcur && pcur->meta.name) {
+			if (r_str_startswith (pcur->meta.name, "null")) {
+				return false;
+			}
+		}
+		// check if p->cur
+		r_list_foreach (a->sessions, iter, aps) {
+			RAsmPlugin *h = aps->plugin;
+			if (r_str_startswith (h->meta.name, "null")) {
+				R_LOG_INFO ("Fallback to null");
+				useparser (a, aps);
+				return false;
+			}
+		}
+		return false;
+	}
+	return true;
 }
 
 static void load_asm_descriptions(RAsm *a) {
@@ -298,8 +362,6 @@ R_API bool r_asm_use(RAsm *a, const char *name) {
 	if (a->analb.anal) {
 		if (a->analb.use (a->analb.anal, name)) {
 			load_asm_descriptions (a);
-			// a->cur = NULL;
-			// a->acur = NULL;
 			return true;
 		}
 		R_LOG_ERROR ("Cannot find '%s' arch plugin. See rasm2 -L or -LL", name);
@@ -310,12 +372,14 @@ R_API bool r_asm_use(RAsm *a, const char *name) {
 	return false;
 }
 
+#if 0
 // R2_600
 // XXX this is r_arch
 R_DEPRECATE R_API void r_asm_set_cpu(RAsm *a, const char *cpu) {
 	R_RETURN_IF_FAIL (a);
 	r_arch_config_set_cpu (a->config, cpu);
 }
+#endif
 
 R_DEPRECATE R_API int r_asm_set_bits(RAsm *a, int bits) {
 	a->config->bits = bits;
@@ -373,9 +437,8 @@ R_API int r_asm_disassemble(RAsm *a, RAnalOp *op, const ut8 *buf, int len) {
 		return 0;
 	}
 
-	int ret = 0; // op->payload = 0;
+	int ret = 0;
 	op->size = 4;
-	// op->bitsize = 0;
 	r_anal_op_set_mnemonic (op, op->addr, "");
 	if (a->config->codealign) {
 		const int mod = a->pc % a->config->codealign;
@@ -386,11 +449,8 @@ R_API int r_asm_disassemble(RAsm *a, RAnalOp *op, const ut8 *buf, int len) {
 		}
 	}
 	if (a->analb.anal) {
-		// disassemble using the analysis plugin if found
-		// a->analb.opinit (op);
-		ret = a->analb.decode (a->analb.anal, op, a->pc, buf, len, R_ARCH_OP_MASK_ESIL | R_ARCH_OP_MASK_DISASM);
-		// r_strbuf_set (&op->buf_asm, aop.mnemonic? aop.mnemonic: "");
-		// a->analb.opfini (op);
+		ret = a->analb.decode (a->analb.anal, op, a->pc,buf, len,
+				R_ARCH_OP_MASK_ESIL | R_ARCH_OP_MASK_DISASM);
 	}
 	if (ret < 0) {
 		ret = 0;
@@ -421,10 +481,11 @@ R_API int r_asm_disassemble(RAsm *a, RAnalOp *op, const ut8 *buf, int len) {
 			r_anal_op_set_mnemonic (op, op->addr, "invalid");
 		}
 	}
-	if (a->ofilter) {
-		char *newtext = r_parse_instruction (a->ofilter, op->mnemonic);
+	if (a->pseudo) {
+		char *newtext = r_asm_parse_pseudo (a, op->mnemonic);
 		if (newtext) {
 			r_anal_op_set_mnemonic (op, op->addr, newtext);
+			free (newtext);
 		}
 	}
 	int opsz = (op->size > 0)? R_MAX (0, R_MIN (len, op->size)): 1;
@@ -498,9 +559,6 @@ static int r_asm_assemble(RAsm *a, RAnalOp *op, const char *buf) {
 	if (!b) {
 		return 0;
 	}
-	if (a->ifilter) {
-		r_parse_parse (a->ifilter, buf, b);
-	}
 	r_str_case (b, false); // to-lower
 	if (a->analb.anal) {
 		ut8 buf[256] = {0};
@@ -544,14 +602,14 @@ R_API RAsmCode* r_asm_mdisassemble(RAsm *a, const ut8 *buf, int len) {
 		RAnalOp op = {0};
 		r_anal_op_init (&op);
 		r_asm_set_pc (a, pc + idx);
-		/// we can change this to return RAnalOp* instead of passing it as arg here
+		// we can change this to return RAnalOp* instead of passing it as arg here
 		ret = r_asm_disassemble (a, &op, buf + idx, len - idx);
 		if (ret < 1) {
 			ret = mininstrsize;
 		}
 		ret = op.size;
-		if (a->ofilter) {
-			char *newtext = r_parse_instruction (a->ofilter, op.mnemonic);
+		if (a->pseudo) {
+			char *newtext = r_asm_parse_pseudo (a, op.mnemonic);
 			if (newtext) {
 				free (op.mnemonic);
 				op.mnemonic = newtext;
@@ -580,14 +638,17 @@ R_API RAsmCode* r_asm_mdisassemble_hexstr(RAsm *a, RParse *p, const char *hexstr
 	}
 	RAsmCode *ret = r_asm_mdisassemble (a, buf, (ut64)len);
 	if (ret && p) {
-		// XXX this can crash the output buffer
-		r_parse_parse (p, ret->assembly, ret->assembly);
+		char *res = r_asm_parse_pseudo (a, ret->assembly);
+		if (res) {
+			free (ret->assembly);
+			ret->assembly = res;
+		}
 	}
 	free (buf);
 	return ret;
 }
 
-static void __flag_free_kv(HtPPKv *kv) {
+static void htpp_freekv(HtPPKv *kv) {
 	if (kv) {
 		free (kv->key);
 		free (kv->value);
@@ -595,7 +656,7 @@ static void __flag_free_kv(HtPPKv *kv) {
 	}
 }
 
-static void *__dup_val(const void *v) {
+static void *htpp_strdup(const void *v) {
 	return (void *)strdup ((char *)v);
 }
 
@@ -680,13 +741,18 @@ static int parse_asm_directive(RAsm *a, RAnalOp *op, RAsmCode *acode, char *ptr_
 			R_LOG_ERROR ("cannot use %s", ptr + 6);
 		}
 	} else if (r_str_startswith (ptr, ".bits ")) {
-		ret = r_asm_pseudo_bits (a, ptr + 6);
+		if (!(r_asm_set_bits (a, r_num_math (NULL, ptr + 6)))) {
+			R_LOG_ERROR ("Unsupported value for .bits");
+			ret = -1;
+		} else {
+			ret = 0;
+		}
 	} else if (r_str_startswith (ptr, ".fill ")) {
 		ret = r_asm_pseudo_fill (op, ptr + 6);
 	} else if (r_str_startswith (ptr, ".kernel ")) {
 		r_syscall_setup (a->syscall, a->config->arch, a->config->bits, asmcpu, ptr + 8);
 	} else if (r_str_startswith (ptr, ".cpu ")) {
-		r_asm_set_cpu (a, ptr + 5);
+		r_arch_config_set_cpu (a->config, ptr + 5);
 	} else if (r_str_startswith (ptr, ".os ")) {
 		r_syscall_setup (a->syscall, a->config->arch, a->config->bits, asmcpu, ptr + 4);
 	} else if (r_str_startswith (ptr, ".hex ")) {
@@ -727,10 +793,9 @@ static int parse_asm_directive(RAsm *a, RAnalOp *op, RAsmCode *acode, char *ptr_
 			R_LOG_ERROR ("Invalid syntax for '.equ': Use '.equ <word>=<word>'");
 		}
 	} else if (r_str_startswith (ptr, ".org ")) {
-		if (r_asm_pseudo_org (a, ptr + 5)) {
-			ret = 0;
-			*off = a->pc;
-		}
+		r_asm_set_pc (a, r_num_math (NULL, ptr + 5));
+		ret = 0;
+		*off = a->pc;
 	} else if (r_str_startswith (ptr, ".offset ")) {
 		R_LOG_ERROR ("Invalid use of the .offset directory. This directive is only supported in r2 -c 'waf'");
 	} else if (r_str_startswith (ptr, ".text")) {
@@ -784,7 +849,7 @@ R_API RAsmCode *r_asm_massemble(RAsm *a, const char *assembly) {
 		return NULL;
 	}
 	ht_pp_free (a->flags);
-	if (!(a->flags = ht_pp_new (__dup_val, __flag_free_kv, NULL))) {
+	if (!(a->flags = ht_pp_new (htpp_strdup, htpp_freekv, NULL))) {
 		free (tokens);
 		return NULL;
 	}
@@ -979,9 +1044,6 @@ R_API RAsmCode *r_asm_massemble(RAsm *a, const char *assembly) {
 			} else { /* Instruction */
 				char *str = ptr_start;
 				r_str_trim (str);
-				if (a->ifilter) {
-					r_parse_parse (a->ifilter, ptr_start, ptr_start);
-				}
 				if (acode->equs) {
 					if (!*ptr_start) {
 						continue;
@@ -1039,19 +1101,8 @@ fail:
 	return NULL;
 }
 
-#if 0
-// XXX this is unused code!
-R_API bool r_asm_modify(RAsm *a, ut8 *buf, int field, ut64 val) {
-	return (a->cur && a->cur->modify) ? a->cur->modify (a, buf, field, val): false;
-}
-#endif
-
 R_API char *r_asm_describe(RAsm *a, const char* str) {
 	return (a && a->pair)? sdb_get (a->pair, str, 0): NULL;
-}
-
-R_API const RList* r_asm_get_plugins(RAsm *a) {
-	return a->plugins;
 }
 
 /* to ease the use of the native bindings (not used in r2) */
@@ -1159,4 +1210,30 @@ R_API RList *r_asm_cpus(RAsm *a) {
 		: r_list_newf (free);
 	r_list_sort (list, (RListComparator)strcmp);
 	return list;
+}
+
+R_API char *r_asm_parse(RAsm *a, const char *s, int what) {
+	char *res = strdup (s);
+	if (what & R_PARSE_FILTER_IMMTRIM) {
+		char *newres = r_asm_parse_immtrim (a, s);
+		if (newres) {
+			free (res);
+			res = newres;
+		}
+	}
+	if (what & R_PARSE_FILTER_SUBVAR) {
+		// ut64 addr = a->pc;
+		// r_asm_parse_subvar (a, f, addr, oplen, ..)
+	}
+	if (what & R_PARSE_FILTER_PSEUDO) {
+		char *newres = r_asm_parse_pseudo (a, s);
+		if (newres) {
+			free (res);
+			res = newres;
+		}
+	}
+	if (what & R_PARSE_FILTER_COLOR) {
+		// TODO
+	}
+	return res;
 }

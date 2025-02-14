@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2013-2024 - pancake */
+/* radare2 - LGPL - Copyright 2013-2025 - pancake */
 
 #include <r_arch.h>
 #include <r_anal.h>
@@ -36,9 +36,9 @@ call = 4
 
 #define CSINC X86
 #define CSINC_MODE \
-	(as->config->bits == 64)? CS_MODE_64: \
-	(as->config->bits == 32)? CS_MODE_32: \
-	(as->config->bits == 16)? CS_MODE_16: 0
+	R_SYS_BITS_CHECK (as->config->bits, 64)? CS_MODE_64: \
+	R_SYS_BITS_CHECK (as->config->bits, 32)? CS_MODE_32: \
+	R_SYS_BITS_CHECK (as->config->bits, 16)? CS_MODE_16: 0
 #include "../capstone.inc.c"
 
 typedef struct plugin_data_t {
@@ -373,20 +373,20 @@ static char *getarg(struct Getarg* gop, int n, int set, char *setop, ut32 *bitsi
 static int cond_x862r2(int id) {
 	switch (id) {
 	case X86_INS_JE:
-		return R_ANAL_COND_EQ;
+		return R_ANAL_CONDTYPE_EQ;
 	case X86_INS_JNE:
-		return R_ANAL_COND_NE;
+		return R_ANAL_CONDTYPE_NE;
 	case X86_INS_JB:
 	case X86_INS_JL:
-		return R_ANAL_COND_LT;
+		return R_ANAL_CONDTYPE_LT;
 	case X86_INS_JBE:
 	case X86_INS_JLE:
-		return R_ANAL_COND_LE;
+		return R_ANAL_CONDTYPE_LE;
 	case X86_INS_JG:
 	case X86_INS_JA:
-		return R_ANAL_COND_GT;
+		return R_ANAL_CONDTYPE_GT;
 	case X86_INS_JAE:
-		return R_ANAL_COND_GE;
+		return R_ANAL_CONDTYPE_GE;
 	case X86_INS_JS:
 	case X86_INS_JNS:
 	case X86_INS_JO:
@@ -409,16 +409,18 @@ static const char *reg32_to_name(ut8 reg) {
 }
 #endif
 
-// R2_590 - review ;D
-static char *get64from32(const char *s) {
+static inline bool get64from32(const char *s, char *out, size_t outsz) {
 	if (*s == 'e') {
-		return r_str_newf ("r%s", s + 1);
-	} else if (*s == 'r' && isdigit (s[1])) {
+		snprintf (out, outsz, "r%s", s + 1);
+		return true;
+	}
+	if (*s == 'r' && isdigit (s[1])) {
 		if (s[2] == 'd' || (s[2] != 0 && isdigit(s[2]) && s[3] == 'd')) {
-			return r_str_newf ("r%d", atoi (s + 1));
+			snprintf (out, outsz, "r%d", atoi (s + 1));
+			return true;
 		}
 	}
-	return NULL;
+	return false;
 }
 
 static void anop_esil(RArchSession *as, RAnalOp *op, ut64 addr, const ut8 *buf, int len, csh handle, cs_insn *insn) {
@@ -862,8 +864,9 @@ static void anop_esil(RArchSession *as, RAnalOp *op, ut64 addr, const ut8 *buf, 
 				src = getarg (&gop, 1, 0, NULL, NULL);
 				// dst is name of register from instruction.
 				dst = getarg (&gop, 0, 0, NULL, NULL);
-				char *dst64 = get64from32 (dst);
-				if (bits == 64 && dst64) {
+				char dst64[16];
+				const bool havedst = get64from32 (dst, dst64, sizeof (dst64));
+				if (bits == 64 && havedst) {
 					// Here it is still correct, because 'e** = X'
 					// turns into 'r** = X' (first one will keep higher bytes,
 					// second one will overwrite them with zeros).
@@ -882,7 +885,6 @@ static void anop_esil(RArchSession *as, RAnalOp *op, ut64 addr, const ut8 *buf, 
 				}
 				free (src);
 				free (dst);
-				free (dst64);
 			}
 			break;
 		}
@@ -1648,8 +1650,9 @@ static void anop_esil(RArchSession *as, RAnalOp *op, ut64 addr, const ut8 *buf, 
 			src = getarg (&gop, 1, 0, NULL, NULL);
 			dst = getarg (&gop, 0, 1, "^", &bitsize);
 			dst2 = getarg (&gop, 0, 0, NULL, NULL);
-			char *dst_reg64 = get64from32 (dst2);
-			if (bits == 64 && dst_reg64) {
+			char dst_reg64[16];
+			const bool havedst = get64from32 (dst2, dst_reg64, sizeof (dst_reg64));
+			if (bits == 64 && havedst) {
 				// (64-bit ^ 32-bit) & 0xFFFF FFFF -> 64-bit, it's alright, higher bytes will be eliminated
 				// (consider this is operation with 32-bit regs in 64-bit environment).
 				esilprintf (op, "%s,%s,^,0xffffffff,&,%s,=,$z,zf,:=,$p,pf,:=,%d,$s,sf,:=,0,cf,:=,0,of,:=",
@@ -1661,7 +1664,6 @@ static void anop_esil(RArchSession *as, RAnalOp *op, ut64 addr, const ut8 *buf, 
 			R_FREE (src);
 			R_FREE (dst);
 			R_FREE (dst2);
-			R_FREE (dst_reg64);
 		}
 		break;
 	case X86_INS_XORPS:
@@ -1873,8 +1875,9 @@ static void anop_esil(RArchSession *as, RAnalOp *op, ut64 addr, const ut8 *buf, 
 			src = getarg (&gop, 1, 0, NULL, NULL);
 			dst = getarg (&gop, 0, 1, "&", &bitsize);
 			dst2 = getarg (&gop, 0, 0, NULL, NULL);
-			char *dst_reg64 = get64from32 (dst2);
-			if (bits == 64 && dst_reg64) {
+			char dst_reg64[16];
+			const bool havedst = get64from32 (dst2, dst_reg64, sizeof (dst_reg64));
+			if (bits == 64 && havedst) {
 				// (64-bit & 32-bit) & 0xFFFF FFFF -> 64-bit, it's alright, higher bytes will be eliminated
 				// (consider this is operation with 32-bit regs in 64-bit environment).
 				esilprintf (op, "%s,%s,&,0xffffffff,&,%s,=,$z,zf,:=,$p,pf,:=,%d,$s,sf,:=,0,cf,:=,0,of,:=",
@@ -1885,7 +1888,6 @@ static void anop_esil(RArchSession *as, RAnalOp *op, ut64 addr, const ut8 *buf, 
 			free (src);
 			free (dst);
 			free (dst2);
-			free (dst_reg64);
 		}
 		break;
 	case X86_INS_PANDN:
@@ -2910,19 +2912,33 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 	case X86_INS_HLT:
 		op->type = R_ANAL_OP_TYPE_TRAP;
 		break;
+	case X86_INS_VPINSRQ:
+	case X86_INS_VPINSRD:
+	case X86_INS_VPINSRW:
+	case X86_INS_VPINSRB:
+		op->type = R_ANAL_OP_TYPE_MOV;
+		break;
 	case X86_INS_FBLD:
 	case X86_INS_FBSTP:
+	case X86_INS_FINCSTP:
+	case X86_INS_FNSTCW:
+	case X86_INS_FNSTSW:
+	case X86_INS_FRSTOR:
+	case X86_INS_FNSAVE:
+	case X86_INS_FNSTENV:
+	case X86_INS_FXSAVE:
+	case X86_INS_FXSAVE64:
+	case X86_INS_FISTTP:
+		op0_memimmhandle (op, insn, addr, regsz);
+		/* fallthu */
 	case X86_INS_FCOMPP:
 	case X86_INS_FDECSTP:
 	case X86_INS_FEMMS:
 	case X86_INS_FFREE:
 	case X86_INS_FICOM:
 	case X86_INS_FICOMP:
-	case X86_INS_FINCSTP:
 	case X86_INS_FNCLEX:
 	case X86_INS_FNINIT:
-	case X86_INS_FNSTCW:
-	case X86_INS_FNSTSW:
 	case X86_INS_FPATAN:
 	case X86_INS_FPREM:
 	case X86_INS_FPREM1:
@@ -2931,19 +2947,13 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 	case X86_INS_FFREEP:
 #endif
 	case X86_INS_FRNDINT:
-	case X86_INS_FRSTOR:
-	case X86_INS_FNSAVE:
 	case X86_INS_FSCALE:
 	case X86_INS_FSETPM:
 	case X86_INS_FSINCOS:
-	case X86_INS_FNSTENV:
 	case X86_INS_FXAM:
-	case X86_INS_FXSAVE:
-	case X86_INS_FXSAVE64:
 	case X86_INS_FXTRACT:
 	case X86_INS_FYL2X:
 	case X86_INS_FYL2XP1:
-	case X86_INS_FISTTP:
 	case X86_INS_FSQRT:
 	case X86_INS_FXCH:
 		op->family = R_ANAL_OP_FAMILY_FPU;
@@ -2962,6 +2972,7 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 	case X86_INS_BTR:
 	case X86_INS_BTS:
 		op->type = R_ANAL_OP_TYPE_CMP;
+		op0_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_FABS:
 		op->type = R_ANAL_OP_TYPE_ABS;
@@ -2969,6 +2980,8 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 		break;
 	case X86_INS_FLDCW:
 	case X86_INS_FLDENV:
+		op0_memimmhandle (op, insn, addr, regsz);
+		/* fallthru */
 	case X86_INS_FLDL2E:
 	case X86_INS_FLDL2T:
 	case X86_INS_FLDLG2:
@@ -2984,14 +2997,18 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 	case X86_INS_FISTP:
 	case X86_INS_FST:
 	case X86_INS_FSTP:
-	case X86_INS_FSTPNCE:
 	case X86_INS_FXRSTOR:
 	case X86_INS_FXRSTOR64:
+		op0_memimmhandle (op, insn, addr, regsz);
+		/* fallthru */
+	case X86_INS_FSTPNCE:
 		op->type = R_ANAL_OP_TYPE_STORE;
 		op->family = R_ANAL_OP_FAMILY_FPU;
 		break;
 	case X86_INS_FDIV:
 	case X86_INS_FIDIV:
+		op0_memimmhandle (op, insn, addr, regsz);
+		/* fallthru */
 	case X86_INS_FDIVP:
 	case X86_INS_FDIVR:
 	case X86_INS_FIDIVR:
@@ -3001,15 +3018,19 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 		break;
 	case X86_INS_FSUBR:
 	case X86_INS_FISUBR:
-	case X86_INS_FSUBRP:
 	case X86_INS_FSUB:
 	case X86_INS_FISUB:
+		op0_memimmhandle (op, insn, addr, regsz);
+		/* fallthru */
+	case X86_INS_FSUBRP:
 	case X86_INS_FSUBP:
 		op->type = R_ANAL_OP_TYPE_SUB;
 		op->family = R_ANAL_OP_FAMILY_FPU;
 		break;
 	case X86_INS_FMUL:
 	case X86_INS_FIMUL:
+		op0_memimmhandle (op, insn, addr, regsz);
+		/* fallthru */
 	case X86_INS_FMULP:
 		op->type = R_ANAL_OP_TYPE_MUL;
 		op->family = R_ANAL_OP_FAMILY_FPU;
@@ -3080,6 +3101,7 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 	case X86_INS_CMOVP:
 	case X86_INS_CMOVS:
 		op->type = R_ANAL_OP_TYPE_CMOV;
+		op1_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_STOSB:
 	case X86_INS_STOSD:
@@ -3247,12 +3269,14 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 		// TODO: RCL Still does not work as intended
 		//  - Set flags
 		op->type = R_ANAL_OP_TYPE_ROL;
+		op0_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_ROR:
 	case X86_INS_RCR:
 		// TODO: RCR Still does not work as intended
 		//  - Set flags
 		op->type = R_ANAL_OP_TYPE_ROR;
+		op0_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_SHL:
 	case X86_INS_SHLD:
@@ -3262,24 +3286,29 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 		// number of bits shifted is greater than the size of the
 		// destination.
 		op->type = R_ANAL_OP_TYPE_SHL;
+		op0_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_SAR:
 	case X86_INS_SARX:
 		// TODO: Set CF. See case X86_INS_SHL for more details.
 		op->type = R_ANAL_OP_TYPE_SAR;
+		op0_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_SAL:
 		// TODO: Set CF: See case X86_INS_SAL for more details.
 		op->type = R_ANAL_OP_TYPE_SAL;
+		op0_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_SALC:
 		op->type = R_ANAL_OP_TYPE_SAL;
+		op0_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_SHR:
 	case X86_INS_SHRD:
 	case X86_INS_SHRX:
 		// TODO: Set CF: See case X86_INS_SAL for more details.
 		op->type = R_ANAL_OP_TYPE_SHR;
+		op0_memimmhandle (op, insn, addr, regsz);
 		op->val = INSOP(1).imm;
 		// XXX this should be op->imm
 		//op->src[0] = r_anal_value_new ();
@@ -3642,21 +3671,25 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 		// The CF flag is not affected. The OF, SF, ZF, AF, and PF flags
 		// are set according to the result.
 		op->type = R_ANAL_OP_TYPE_ADD;
+		op0_memimmhandle (op, insn, addr, regsz);
 		op->val = 1;
 		break;
 	case X86_INS_DEC:
 		// The CF flag is not affected. The OF, SF, ZF, AF, and PF flags
 		// are set according to the result.
 		op->type = R_ANAL_OP_TYPE_SUB;
+		op0_memimmhandle (op, insn, addr, regsz);
 		op->val = 1;
 		break;
 	case X86_INS_NEG:
 		op->type = R_ANAL_OP_TYPE_SUB;
 		op->family = R_ANAL_OP_FAMILY_CPU;
+		op0_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_NOT:
 		op->type = R_ANAL_OP_TYPE_NOT;
 		op->family = R_ANAL_OP_FAMILY_CPU;
+		op0_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_PSUBB:
 	case X86_INS_PSUBW:
@@ -3725,16 +3758,22 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 		break;
 	case X86_INS_IDIV:
 		op->type = R_ANAL_OP_TYPE_DIV;
+		op0_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_DIV:
 		op->type = R_ANAL_OP_TYPE_DIV;
+		op0_memimmhandle (op, insn, addr, regsz);
 		break;
 	case X86_INS_IMUL:
 		op->type = R_ANAL_OP_TYPE_MUL;
 		op->sign = true;
+		op0_memimmhandle (op, insn, addr, regsz);
+		op1_memimmhandle (op, insn, addr, regsz);
 		break;
-	case X86_INS_AAM:
 	case X86_INS_MUL:
+		op0_memimmhandle (op, insn, addr, regsz);
+		/* fallthru */
+	case X86_INS_AAM:
 	case X86_INS_MULX:
 	case X86_INS_MULPD:
 	case X86_INS_MULPS:
@@ -3795,6 +3834,8 @@ static void anop(RArchSession *a, RAnalOp *op, ut64 addr, const ut8 *buf, int le
 		break;
 	case X86_INS_ADC:
 		op->type = R_ANAL_OP_TYPE_ADD;
+		op0_memimmhandle (op, insn, addr, regsz);
+		op1_memimmhandle (op, insn, addr, regsz);
 		break;
 		/* Direction flag */
 	case X86_INS_CLD:
@@ -4014,8 +4055,22 @@ In a true 32 bit Windows GS is always zero.
 
 static char *get_reg_profile(RArchSession *as) {
 	R_RETURN_VAL_IF_FAIL (as && as->config, NULL);
+	int bits = as->config->bits;
+	switch (bits) {
+	case 16:
+	case 32:
+	case 64:
+		break;
+	default:
+		if (R_SYS_BITS_CHECK (bits, 64)) {
+			bits = 64;
+		} else {
+			bits = 32;
+		}
+		break;
+	}
 	const char *p = NULL;
-	switch (as->config->bits) {
+	switch (bits) {
 	case 16: p =
 		"=PC	ip\n"
 		"=SP	sp\n"
@@ -4393,6 +4448,11 @@ static int archinfo(RArchSession *as, ut32 q) {
 	case R_ARCH_INFO_CODE_ALIGN:
 	case R_ARCH_INFO_DATA_ALIGN:
 		return 0;
+	case R_ARCH_INFO_FUNC_ALIGN:
+		if (R_SYS_BITS_CHECK (as->config->bits, 64)) {
+			return 4;
+		}
+		return 0;
 	case R_ARCH_INFO_MAXOP_SIZE:
 		return 16;
 	case R_ARCH_INFO_INVOP_SIZE:
@@ -4420,6 +4480,10 @@ static RList *anal_preludes(RArchSession *as) {
 		r_list_append (l, strdup ("554889e5"));
 		r_list_append (l, strdup ("55488bec"));
 		r_list_append (l, strdup ("f30f1efa")); // endbr64
+		// r_list_append (l, strdup ("4157415653")); // push r15,r14,rbx
+		r_list_append (l, strdup ("5541574156")); // push rbp,r15,r14
+		r_list_append (l, strdup ("415741564154")); // push r15,r14,r13,r12
+		r_list_append (l, strdup ("56534883"));
 		break;
 	default:
 		// nothing to do on x86-16
@@ -4464,10 +4528,8 @@ static bool esilcb(RArchSession *as, RArchEsilAction action) {
 		R_LOG_ERROR ("Failed to find an esil instance");
 		return false;
 	}
-	r_esil_set_op (esil, "TLS_BEGIN", tls_begin,
-		0, 0, R_ESIL_OP_TYPE_CUSTOM);
-	r_esil_set_op (esil, "TLS_END", tls_end,
-		0, 0, R_ESIL_OP_TYPE_CUSTOM);
+	r_esil_set_op (esil, "TLS_BEGIN", tls_begin, 0, 0, R_ESIL_OP_TYPE_CUSTOM, NULL);
+	r_esil_set_op (esil, "TLS_END", tls_end, 0, 0, R_ESIL_OP_TYPE_CUSTOM, NULL);
 	// XXX. this depends on kernel
 	// r_esil_set_interrupt (esil, 0x80, x86_int_0x80);
 	/* disable by default */

@@ -43,6 +43,9 @@ static void object_delete_items(RBinObject *o) {
 	r_list_free (o->strings);
 	ht_up_free (o->strings_db);
 
+	if (!RVecRBinImport_empty (&o->imports_vec)) {
+		RVecRBinImport_fini (&o->imports_vec);
+	}
 	if (!RVecRBinSymbol_empty (&o->symbols_vec)) {
 		RVecRBinSymbol_fini (&o->symbols_vec);
 		if (o->symbols) {
@@ -209,7 +212,7 @@ R_IPI RBinObject *r_bin_object_new(RBinFile *bf, RBinPlugin *plugin, ut64 basead
 	bo->plugin = plugin;
 	bo->loadaddr = loadaddr != UT64_MAX ? loadaddr : 0;
 	RVecRBinSymbol_init (&bo->symbols_vec);
-	bo->pool = r_strpool_new (0);
+	bo->pool = r_strpool_new ();
 	bf->bo = bo;
 
 	if (plugin && plugin->load) {
@@ -422,12 +425,12 @@ R_API int r_bin_object_set_items(RBinFile *bf, RBinObject *bo) {
 	}
 	if (bin->filter_rules & (R_BIN_REQ_RELOCS | R_BIN_REQ_IMPORTS)) {
 		if (p->relocs) {
-			const RList *l = p->relocs (bf); // XXX this is an internal list (should be a vector), and shouldnt be freed by the caller
+			RList *l = (RList *)p->relocs (bf); // XXX this is an internal list (should be a vector), and shouldnt be freed by the caller
 			if (l) {
 				REBASE_PADDR (bo, l, RBinReloc);
 				bo->relocs = list2rbtree ((RList*)l);
-				// l->free = NULL;
-				// r_list_free (l);
+				l->free = NULL; // may leak or crash
+				r_list_free (l);
 			}
 		}
 	}

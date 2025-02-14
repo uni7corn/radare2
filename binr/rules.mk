@@ -38,8 +38,8 @@ endif
 ifeq (${COMPILER},wasi)
 LINK+=$(SHLR)/zip/librz.a
 LINK+=$(SHLR)/gdb/lib/libgdbr.a
-LINK+=$(SHLR)/capstone/libcapstone.a
-LINK+=$(SHLR)/sdb/src/libsdb.a
+LINK+=$(CS_ROOT)/libcapstone.a
+LINK+=$(SHLR)/../subprojects/sdb/src/libsdb.a
 
 # instead of libr.a
 LINK+=$(LIBR)/util/libr_util.a
@@ -65,12 +65,12 @@ LINK+=$(LIBR)/crypto/libr_crypto.a
 LINK+=$(LIBR)/main/libr_main.a
 else ifeq (${COMPILER},wasm)
 LINK+=$(SHLR)/libr_shlr.a
-LINK+=$(SHLR)/sdb/src/libsdb.a
+LINK+=$(SHLR)/../subprojects/sdb/src/libsdb.a
 include $(SHLR)/capstone.mk
 EXT_EXE=.wasm
 else ifeq (${COMPILER},emscripten)
 LINK+=$(SHLR)/libr_shlr.a
-LINK+=$(SHLR)/sdb/src/libsdb.a
+LINK+=$(SHLR)/../subprojects/sdb/src/libsdb.a
 include $(SHLR)/capstone.mk
 CFLAGS+= -s SIDE_MODULE=1
 #CFLAGS+=-s ERROR_ON_UNDEFINED_SYMBOLS=0

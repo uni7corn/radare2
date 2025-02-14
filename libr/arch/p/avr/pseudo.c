@@ -1,6 +1,6 @@
-/* radare - LGPL - Copyright 2017-2019 - wargio */
+/* radare - LGPL - Copyright 2017-2024 - wargio */
 
-#include <r_parse.h>
+#include <r_asm.h>
 
 static bool replace(int argc, const char *argv[], char *newstr) {
 	int i,j,k;
@@ -125,7 +125,7 @@ static bool replace(int argc, const char *argv[], char *newstr) {
 }
 
 #define WSZ 128
-static int parse(RParse *p, const char *data, char *str) {
+static char *parse(RAsmPluginSession *aps, const char *data) {
 	int i, len = strlen (data);
 	char w0[WSZ];
 	char w1[WSZ];
@@ -136,11 +136,13 @@ static int parse(RParse *p, const char *data, char *str) {
 
 	// malloc can be slow here :?
 	if (!(buf = malloc (len + 1))) {
-		return false;
+		return NULL;
 	}
 	memcpy (buf, data, len + 1);
 
 	r_str_trim (buf);
+	char *str = malloc (len + 128);
+	strcpy (str, data);
 	if (*buf) {
 		w0[0] = '\0';
 		w1[0] = '\0';
@@ -205,19 +207,23 @@ static int parse(RParse *p, const char *data, char *str) {
 		}
 	}
 	free (buf);
-	return true;
+	return str;
 }
 
-RParsePlugin r_parse_plugin_avr_pseudo = {
-	.name = "avr.pseudo",
-	.desc = "AVR pseudo syntax",
+RAsmPlugin r_asm_plugin_avr = {
+	.meta = {
+		.name = "avr",
+		.desc = "AVR pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.parse = parse
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_avr_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_avr,
 	.version = R2_VERSION
 };
 #endif

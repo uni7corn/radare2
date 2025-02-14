@@ -42,7 +42,7 @@ static void print_debug_map_line(RDebug *dbg, RDebugMap *map, ut64 addr, const c
 		);
 		free (name);
 	} else {
-		const char *fmtstr = dbg->bits & R_SYS_BITS_64
+		const char *fmtstr = R_SYS_BITS_CHECK (dbg->bits, 64)
 			? "0x%016" PFMT64x " - 0x%016" PFMT64x " %c %s %6s %c %s %s %s%s%s\n"
 			: "0x%08" PFMT64x " - 0x%08" PFMT64x " %c %s %6s %c %s %s %s%s%s\n";
 		const char *type = map->shared ? "sys": "usr";
@@ -84,6 +84,11 @@ R_API void r_debug_map_list(RDebug *dbg, ut64 addr, const char *input) {
 	if (!dbg) {
 		return;
 	}
+	int fd = -1;
+	RIODesc *d = dbg->iob.io->desc;
+	if (d) {
+		fd = d->fd;
+	}
 
 	switch (input[0]) {
 	case 'j': // "dmj" add JSON opening array brace
@@ -94,6 +99,13 @@ R_API void r_debug_map_list(RDebug *dbg, ut64 addr, const char *input) {
 		pj_a (pj);
 		break;
 	case '*': // "dm*" don't print a header for r2 commands output
+		if (input[1] == '-') {
+			r_cons_println ("om-*");
+			r_cons_printf ("omu %d 0x00000000 0xffffffffffffffff 0x00000000 rwx\n", fd);
+			return;
+		} else if (input[1] == '*') {
+			r_cons_println ("om-*");
+		}
 		break;
 	default:
 		// TODO: Find a way to only print headers if output isn't being grepped
@@ -111,8 +123,20 @@ R_API void r_debug_map_list(RDebug *dbg, ut64 addr, const char *input) {
 				print_debug_map_json (map, pj);
 				break;
 			case '*': // "dm*"
-				{
-					char *name = (map->name && *map->name)
+				if (input[1] == '*') {
+					char *name = R_STR_ISNOTEMPTY (map->name)
+						? r_str_newf ("%s.%s", map->name, r_str_rwx_i (map->perm))
+						: r_str_newf ("%08" PFMT64x ".%s", map->addr, r_str_rwx_i (map->perm));
+					r_name_filter (name, 0);
+					ut64 va = map->addr;
+					ut64 sz = map->addr_end - map->addr + 1;
+					ut64 pa = map->addr;
+					const char *rwx = r_str_rwx_i (map->perm);
+					dbg->cb_printf ("om %d 0x%08"PFMT64x" 0x%08"PFMT64x" 0x%08"PFMT64x" %s %s\n",
+							fd, va, sz, pa, rwx, name);
+					free (name);
+				} else {
+					char *name = R_STR_ISNOTEMPTY (map->name)
 						? r_str_newf ("%s.%s", map->name, r_str_rwx_i (map->perm))
 						: r_str_newf ("%08" PFMT64x ".%s", map->addr, r_str_rwx_i (map->perm));
 					r_name_filter (name, 0);
@@ -228,7 +252,8 @@ static void print_debug_maps_ascii_art(RDebug *dbg, RList *maps, ut64 addr, int 
 				mul = findMinMax (maps, &min, &max, skip, width); //  Recalculate minmax
 			}
 			skip++;
-			fmtstr = dbg->bits & R_SYS_BITS_64 // Prefix formatting string (before bar)
+			const bool is64 = R_SYS_BITS_CHECK (dbg->bits, 64);
+			fmtstr = is64
 				? "map %4.8s %c %s0x%016" PFMT64x "%s |"
 				: "map %4.8s %c %s0x%08" PFMT64x "%s |";
 			dbg->cb_printf (fmtstr, humansz,
@@ -245,9 +270,9 @@ static void print_debug_maps_ascii_art(RDebug *dbg, RList *maps, ut64 addr, int 
 					dbg->cb_printf ("-");
 				}
 			}
-			fmtstr = dbg->bits & R_SYS_BITS_64 ? // Suffix formatting string (after bar)
-				"| %s0x%016" PFMT64x "%s %s %s\n" :
-				"| %s0x%08" PFMT64x "%s %s %s\n";
+			fmtstr = is64 // Suffix formatting string (after bar)
+				? "| %s0x%016" PFMT64x "%s %s %s\n"
+				: "| %s0x%08" PFMT64x "%s %s %s\n";
 			dbg->cb_printf (fmtstr, color_prefix, map->addr_end, color_suffix,
 				r_str_rwx_i (map->perm), map->name);
 			last = map->addr;

@@ -476,7 +476,7 @@ static int analop_vle(RArchSession *as, RAnalOp *op, ut64 addr, const ut8 *buf, 
 			op->fail = addr + op->size;
 			break;
 		case R_ANAL_OP_TYPE_CJMP:
-			op->cond = instr->cond; //R_ANAL_COND_NE;
+			op->cond = instr->cond; //R_ANAL_CONDTYPE_NE;
 			op->eob = true;
 			op->jump = addr + instr->fields[instr->n - 1].value;
 			op->fail = addr + op->size;
@@ -869,6 +869,9 @@ static bool decode(RArchSession *as, RAnalOp *op, RAnalOpMask mask) {
 			esilprintf (op, "%s,lr,=", ARG (0));
 			break;
 		case PPC_INS_MR:
+			op->type = R_ANAL_OP_TYPE_RMOV;
+			esilprintf (op, "%s,%s,=", ARG (1), ARG (0));
+			break;
 		case PPC_INS_LI:
 			op->type = R_ANAL_OP_TYPE_MOV;
 			esilprintf (op, "%s,%s,=", ARG (1), ARG (0));
@@ -1581,7 +1584,7 @@ const RArchPlugin r_arch_plugin_ppc_cs = {
 	.meta = {
 		.name = "ppc",
 		.author = "pancake,deroad",
-		.desc = "Capstone (+vle+ps) PowerPC disassembler",
+		.desc = "Capstone (+vle+ps) PowerPC",
 		.license = "Apache-2.0",
 	},
 	.arch = "ppc",

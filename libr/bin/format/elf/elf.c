@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2008-2024 - nibble, pancake, alvaro_fe */
+/* radare - LGPL - Copyright 2008-2025 - nibble, pancake, alvaro_fe */
 
 // R2R db/formats/elf/versioninfo
 // R2R db/formats/elf/reloc
@@ -3747,6 +3747,7 @@ static void _store_bin_sections(ELFOBJ *eo, const RVector *elf_bin_sections) {
 		ptr->type = elf_section_type_tostring (section->type);
 		ptr->add = !eo->phdr; // Load sections if there is no PHDR
 		ptr->perm = elf_flags_to_section_perms (section->flags);
+		ptr->flags = section->flags;
 #if 0
 TODO: ptr->flags = elf_flags_tostring (section->flags);
 #define SHF_WRITE	     (1 << 0)	/* Writable */
@@ -4359,12 +4360,23 @@ static void _set_arm_thumb_bits(struct Elf_(obj_t) *eo, RBinSymbol **symp) {
 // XXX this is slow because we can directly use RBinSymbol instead of RBinElfSymbol imho
 RBinSymbol *Elf_(convert_symbol)(ELFOBJ *eo, RBinElfSymbol *symbol) {
 	ut64 paddr, vaddr;
+	const ut64 baddr = Elf_(get_baddr) (eo);
+	if (baddr && baddr != UT64_MAX && symbol->offset && symbol->offset != UT64_MAX) {
+		if (symbol->is_vaddr && symbol->offset < baddr) {
+			symbol->is_vaddr = false;
+		}
+	}
 	if (symbol->is_vaddr) {
 		paddr = UT64_MAX;
 		vaddr = symbol->offset;
 	} else {
 		paddr = symbol->offset;
-		vaddr = Elf_(p2v_new) (eo, paddr);
+		ut64 va = Elf_(p2v_new) (eo, paddr);
+		if (va != UT64_MAX) {
+			vaddr = va;
+		} else {
+			vaddr = paddr;
+		}
 	}
 
 	RBinSymbol *ptr = R_NEW0 (RBinSymbol);
@@ -4497,7 +4509,7 @@ static RVecRBinElfSymbol *_load_additional_imported_symbols(ELFOBJ *eo, ImportIn
 	// Elf_(fix_symbols) may find additional symbols, some of which could be
 	// imported symbols. Let's reserve additional space for them.
 	int ret_ctr = ii->ret_ctr;
-	r_warn_if_fail (ii->nsym >= ret_ctr);
+	R_WARN_IF_FAIL (ii->nsym >= ret_ctr);
 
 	int nsym = _find_max_symbol_ordinal (ii->memory.symbols_vec);
 	if (nsym < 0) {
@@ -4907,6 +4919,19 @@ void Elf_(free)(ELFOBJ* eo) {
 	if (!eo) {
 		return;
 	}
+	r_list_free (eo->relocs_list);
+	if (eo->imports_by_ord) {
+		int i;
+		for (i = 0; i < eo->imports_by_ord_size; i++) {
+			RBinImport *imp = eo->imports_by_ord[i];
+			if (imp) {
+				r_bin_import_free (eo->imports_by_ord[i]);
+				eo->imports_by_ord[i] = NULL;
+			}
+		}
+		eo->imports_by_ord_size = 0;
+		R_FREE (eo->imports_by_ord);
+	}
 	free (eo->osabi);
 	free (eo->phdr);
 	free (eo->shdr);
@@ -4930,15 +4955,14 @@ void Elf_(free)(ELFOBJ* eo) {
 		free (eo->symbols_by_ord);
 	}
 	r_buf_free (eo->b);
-	if (eo->phdr_symbols_vec != eo->g_symbols_vec) {
-		RVecRBinElfSymbol_free (eo->phdr_symbols_vec);
-		eo->phdr_symbols_vec = NULL;
-	}
-	// causes double free in g_symbols_vec.free() 2 lines below
-	// RVecRBinElfSymbol_free (eo->phdr_symbols_vec);
-	// RVecRBinElfSymbol_free (eo->phdr_imports_vec);
+	RVecRBinElfSymbol_free (eo->phdr_symbols_vec);
+	eo->phdr_symbols_vec = NULL;
+	RVecRBinElfSymbol_free (eo->phdr_imports_vec);
+	eo->phdr_imports_vec = NULL;
+#if INVALID_FREE_OR_LEAK
 	RVecRBinElfSymbol_free (eo->g_symbols_vec);
 	RVecRBinElfSymbol_free (eo->g_imports_vec);
+#endif
 #if 0
 	// R2_590
 	r_vector_free (eo->g_symbols);

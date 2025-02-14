@@ -56,14 +56,12 @@ static void __load_plugins(REggState *es) {
 
 static REggState *__es_new(bool load_plugins) {
 	REggState *es = R_NEW0 (REggState);
-	if (es) {
-		es->l = r_lib_new (NULL, NULL);
-		es->e = r_egg_new ();
-		es->a = r_anal_new ();
-		r_anal_bind (es->a, &es->e->rasm->analb);
-		if (load_plugins) {
-			__load_plugins (es);
-		}
+	es->l = r_lib_new (NULL, NULL);
+	es->e = r_egg_new ();
+	es->a = r_anal_new ();
+	r_anal_bind (es->a, &es->e->rasm->analb);
+	if (load_plugins) {
+		__load_plugins (es);
 	}
 	return es;
 }
@@ -185,7 +183,7 @@ static int openfile(const char *f, int x) {
 #endif
 	return fd;
 }
-#define ISEXEC (fmt!='r')
+#define ISEXEC (fmt != 'r')
 
 R_API int r_main_ragg2(int argc, const char **argv) {
 	const char *file = NULL;
@@ -209,7 +207,7 @@ R_API int r_main_ragg2(int argc, const char **argv) {
 	const char *encoder = NULL;
 	const char *eggprg = NULL;
 	char *sequence = NULL;
-	int bits = (R_SYS_BITS & R_SYS_BITS_64)? 64: 32;
+	int bits = R_SYS_BITS_CHECK (R_SYS_BITS, 64)? 64: 32;
 	int fmt = 0;
 	const char *ofile = NULL;
 	int ofileauto = 0;

@@ -4,7 +4,7 @@
 
 R_API RStrBuf *r_strbuf_new(const char *str) {
 	RStrBuf *s = R_NEW0 (RStrBuf);
-	if (s && str) {
+	if (str) {
 		r_strbuf_set (s, str);
 	}
 	return s;
@@ -13,12 +13,10 @@ R_API RStrBuf *r_strbuf_new(const char *str) {
 R_API RStrBuf *r_strbuf_newf(const char *fmt, ...) {
 	R_RETURN_VAL_IF_FAIL (fmt, NULL);
 	RStrBuf *sb = R_NEW0 (RStrBuf);
-	if (sb) {
-		va_list ap;
-		va_start (ap, fmt);
-		R_UNUSED_RESULT (r_strbuf_vappendf (sb, fmt, ap));
-		va_end (ap);
-	}
+	va_list ap;
+	va_start (ap, fmt);
+	R_UNUSED_RESULT (r_strbuf_vappendf (sb, fmt, ap));
+	va_end (ap);
 	return sb;
 }
 
@@ -41,7 +39,7 @@ R_API int r_strbuf_length(RStrBuf *sb) {
 
 R_API void r_strbuf_init(RStrBuf *sb) {
 	R_RETURN_IF_FAIL (sb);
-	memset (sb, 0, sizeof (RStrBuf));
+	*sb = (const RStrBuf){0};
 }
 
 R_API const char *r_strbuf_initf(RStrBuf *sb, const char *fmt, ...) {
@@ -318,6 +316,100 @@ R_API bool r_strbuf_vappendf(RStrBuf *sb, const char *fmt, va_list ap) {
 		free (p);
 	} else if (ret >= 0) {
 		ret = r_strbuf_append_n (sb, string, ret);
+	} else {
+		ret = false;
+	}
+	va_end (ap2);
+	return ret;
+}
+
+R_API bool r_strbuf_prependf(RStrBuf *sb, const char *fmt, ...) {
+	va_list ap;
+
+	R_RETURN_VAL_IF_FAIL (sb && fmt, false);
+
+	va_start (ap, fmt);
+	const bool ret = r_strbuf_vprependf (sb, fmt, ap);
+	va_end (ap);
+	return ret;
+}
+
+R_API bool r_strbuf_prepend_n(RStrBuf *sb, const char *s, size_t l) {
+	R_RETURN_VAL_IF_FAIL (sb && s, false);
+	if (l > ST32_MAX) {
+		R_LOG_WARN ("Negative length used in r_strbuf_prepend_n");
+		return false;
+	}
+
+	if (sb->weakref) {
+		return false;
+	}
+
+	// fast path if no chars to prepend
+	if (l == 0) {
+		return true;
+	}
+
+	if ((sb->len + l + 1) <= sizeof (sb->buf)) {
+		memmove (&sb->buf[l], sb->buf, sb->len);
+		memcpy (sb->buf, s, l);
+		sb->buf[sb->len + l] = 0;
+		R_FREE (sb->ptr);
+	} else {
+		int ll = (l < 256)? 256: (l * 2);
+		int newlen = sb->len + ll;
+		char *p = sb->ptr;
+		if (!sb->ptr) {
+			p = malloc (newlen);
+			if (!p) {
+				return false;
+			}
+			if (sb->len > 0) {
+				memcpy (p + l, sb->buf, sb->len);
+			}
+			sb->ptr = p;
+			sb->ptrlen = newlen;
+		} else if (sb->len + l + 1 > sb->ptrlen) {
+			p = realloc (sb->ptr, newlen);
+			if (!p) {
+				return false;
+			}
+			memmove (&p[l], p, sb->len);
+			sb->ptr = p;
+			sb->ptrlen = newlen;
+		}
+		if (p) {
+			memcpy (p, s, l);
+			p[sb->len + l] = 0;
+		}
+	}
+	sb->len += l;
+	return true;
+}
+
+R_API bool r_strbuf_vprependf(RStrBuf *sb, const char *fmt, va_list ap) {
+	va_list ap2;
+	char string[1024];
+
+	R_RETURN_VAL_IF_FAIL (sb && fmt, false);
+
+	if (sb->weakref) {
+		return false;
+	}
+	va_copy (ap2, ap);
+	int ret = vsnprintf (string, sizeof (string), fmt, ap);
+	if (ret >= sizeof (string)) {
+		char *p = malloc (ret + 1);
+		if (!p) {
+			va_end (ap2);
+			return false;
+		}
+		*p = 0;
+		vsnprintf (p, ret + 1, fmt, ap2);
+		ret = r_strbuf_prepend_n (sb, p, ret);
+		free (p);
+	} else if (ret >= 0) {
+		ret = r_strbuf_prepend_n (sb, string, ret);
 	} else {
 		ret = false;
 	}

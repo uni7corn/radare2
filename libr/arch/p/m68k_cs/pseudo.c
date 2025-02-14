@@ -1,14 +1,10 @@
 /* radare - LGPL - Copyright 2016 - pancake */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
 #include <r_lib.h>
 #include <r_util.h>
 #include <r_flag.h>
 #include <r_anal.h>
-#include <r_parse.h>
+#include <r_asm.h>
 
 static bool can_replace(const char *str, int idx, int max_operands) {
 	if (str[idx] > '9' || str[idx] < '1') {
@@ -99,7 +95,7 @@ static int replace(int argc, const char *argv[], char *newstr) {
 }
 
 #define WSZ 64
-static int parse(RParse *p, const char *data, char *str) {
+static char *parse(RAsmPluginSession *aps, const char *data) {
 	int i, len = strlen (data);
 	char w0[WSZ];
 	char w1[WSZ];
@@ -109,22 +105,22 @@ static int parse(RParse *p, const char *data, char *str) {
 	char *buf, *ptr, *optr;
 
 	if (!strcmp (data, "jr ra")) {
-		strcpy (str, "ret");
-		return true;
+		return strdup ("ret");
 	}
 
 	// malloc can be slow here :?
 	if (!(buf = malloc (len + 1))) {
-		return false;
+		return NULL;
 	}
 	memcpy (buf, data, len + 1);
 
-	r_str_replace_in (buf, len+1, ".l", "", 1);
-	r_str_replace_in (buf, len+1, ".w", "", 1);
-	r_str_replace_in (buf, len+1, ".d", "", 1);
-	r_str_replace_in (buf, len+1, ".b", "", 1);
+	r_str_replace_in (buf, len + 1, ".l", "", 1);
+	r_str_replace_in (buf, len + 1, ".w", "", 1);
+	r_str_replace_in (buf, len + 1, ".d", "", 1);
+	r_str_replace_in (buf, len + 1, ".b", "", 1);
 	r_str_trim (buf);
-
+	char *str = malloc (len + 128);
+	strcpy (str, data);
 	if (*buf) {
 		w0[0]='\0';
 		w1[0]='\0';
@@ -189,19 +185,23 @@ static int parse(RParse *p, const char *data, char *str) {
 		}
 	}
 	free (buf);
-	return true;
+	return str;
 }
 
-RParsePlugin r_parse_plugin_m68k_pseudo = {
-	.name = "m68k.pseudo",
-	.desc = "M68K pseudo syntax",
+RAsmPlugin r_asm_plugin_m68k = {
+	.meta = {
+		.name = "m68k",
+		.desc = "M68K pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.parse = parse,
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_m68k_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_m68k,
 	.version = R2_VERSION
 };
 #endif

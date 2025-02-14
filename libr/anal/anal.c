@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2024 - pancake, nibble */
+/* radare - LGPL - Copyright 2009-2025 - pancake, nibble */
 
 #include <r_anal.h>
 #include <config.h>
@@ -13,10 +13,8 @@ static RAnalPlugin *anal_static_plugins[] = {
 R_API void r_anal_set_limits(RAnal *anal, ut64 from, ut64 to) {
 	free (anal->limit);
 	anal->limit = R_NEW0 (RAnalRange);
-	if (anal->limit) {
-		anal->limit->from = from;
-		anal->limit->to = to;
-	}
+	anal->limit->from = from;
+	anal->limit->to = to;
 }
 
 R_API void r_anal_unset_limits(RAnal *anal) {
@@ -75,9 +73,6 @@ static void r_meta_item_free(void *_item) {
 R_API RAnal *r_anal_new(void) {
 	int i;
 	RAnal *anal = R_NEW0 (RAnal);
-	if (!anal) {
-		return NULL;
-	}
 	if (!r_str_constpool_init (&anal->constpool)) {
 		free (anal);
 		return NULL;
@@ -125,7 +120,6 @@ R_API RAnal *r_anal_new(void) {
 	anal->diff_thbb = R_ANAL_THRESHOLDBB;
 	anal->diff_thfcn = R_ANAL_THRESHOLDFCN;
 	anal->syscall = r_syscall_new ();
-	r_io_bind_init (anal->iob);
 	r_flag_bind_init (anal->flb);
 	anal->reg = r_reg_new ();
 	anal->last_disasm_reg = NULL;
@@ -658,7 +652,7 @@ R_API bool r_anal_noreturn_at(RAnal *anal, ut64 addr) {
 			return true;
 		}
 	}
-	RFlagItem *fi = anal->flag_get (anal->flb.f, addr);
+	RFlagItem *fi = anal->flag_get (anal->flb.f, false, addr);
 	if (fi) {
 		if (r_anal_noreturn_at_name (anal, fi->realname ? fi->realname : fi->name)) {
 			return true;
@@ -710,7 +704,7 @@ R_API bool r_anal_is_prelude(RAnal *anal, ut64 addr, const ut8 *data, int len) {
 		return false;
 	}
 	ut8 *owned = NULL;
-	RFlagItem *flag = anal->flag_get (anal->flb.f, addr); // XXX should get a list
+	RFlagItem *flag = anal->flag_get (anal->flb.f, false, addr); // XXX should get a list
 	if (flag) {
 		if (r_str_startswith (flag->name, "func.")) {
 			return true;

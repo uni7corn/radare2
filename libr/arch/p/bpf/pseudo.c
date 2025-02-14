@@ -1,6 +1,6 @@
 /* radare - LGPL - Copyright 2022-2024 - pancake */
 
-#include <r_parse.h>
+#include <r_asm.h>
 
 #define MAXARGS 4
 #define BUFSIZE 64
@@ -66,32 +66,36 @@ static int tokenize(const char* in, char* out[]) {
 	return count;
 }
 
-static int parse(RParse *p, const char *data, char *str) {
+static char *parse(RAsmPluginSession *aps, const char *data) {
 	int i;
 	char *argv[MAXARGS] = { NULL, NULL, NULL, NULL };
 	int argc = tokenize (data, argv);
 
+	char *str = malloc (strlen (data) + 128);
+	strcpy (str, data);
 	if (!replace (argc, argv, str, BUFSIZE)) {
 		strcpy (str, data);
 	}
-
 	for (i = 0; i < MAXARGS; i++) {
 		free (argv[i]);
 	}
-	r_str_fixspaces (str);
-	return true;
+	return r_str_fixspaces (str);
 }
 
-RParsePlugin r_parse_plugin_bpf_pseudo = {
-	.name = "bpf.pseudo",
-	.desc = "bpf pseudo syntax",
+RAsmPlugin r_asm_plugin_bpf = {
+	.meta = {
+		.name = "bpf",
+		.desc = "bpf pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.parse = parse,
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_bpf_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_bpf,
 	.version = R2_VERSION
 };
 #endif

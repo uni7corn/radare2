@@ -39,7 +39,9 @@ static RCoreHelpMessage help_msg_w = {
 
 static RCoreHelpMessage help_msg_wao = {
 	"wao", " [op]", "performs a modification on current opcode",
-	"wao+", "[op]", "same as 'wao', but seeks forward after writing",
+	"waol", " [op]", "length of the patch in bytes (f.example an intel nop is 1 byte)",
+	"wao*", " [op]", "show the commands that will be executed to apply the patch",
+	"wao+", " [op]", "same as 'wao', but seeks forward after writing",
 	"wao", " nop", "nop current opcode",
 	"wao", " jinf", "assemble an infinite loop",
 	"wao", " jz", "make current opcode conditional (same as je) (zero)",
@@ -205,7 +207,7 @@ static RCoreHelpMessage help_msg_wx = {
 };
 
 static void cmd_write_fail(RCore *core) {
-	R_LOG_ERROR ("Cannot write. Use `omf`, `io.cache` or reopen the file in rw with `oo+`");
+	R_LOG_ERROR ("Cannot write. Use `omp`, `io.cache` or reopen the file in rw with `oo+`");
 	r_core_return_value (core, R_CMD_RC_FAILURE);
 }
 
@@ -430,7 +432,7 @@ static int cmd_wo(void *data, const char *input) {
 			if (R_STR_ISNOTEMPTY (algo) && key) {
 				write_encrypted_block (core, algo, key, direction, iv);
 			} else {
-				r_crypto_list (core->crypto, r_cons_printf, 0 | (int)R_CRYPTO_TYPE_ENCRYPT << 8);
+				r_crypto_list (core->crypto, r_cons_printf, 0, R_CRYPTO_TYPE_ENCRYPT);
 				r_core_cmd_help_match_spec (core, help_msg_wo, "wo", input[0]);
 			}
 			free (args);
@@ -451,7 +453,7 @@ static int cmd_wo(void *data, const char *input) {
 			if (R_STR_ISNOTEMPTY (algo) && key) {
 				write_block_signature (core, algo, key);
 			} else {
-				r_crypto_list (core->crypto, r_cons_printf, 0 | (int)R_CRYPTO_TYPE_SIGNATURE << 8);
+				r_crypto_list (core->crypto, r_cons_printf, 0, R_CRYPTO_TYPE_SIGNATURE);
 				r_core_cmd_help_match_spec (core, help_msg_wo, "wo", input[0]);
 			}
 			free (args);
@@ -1651,7 +1653,7 @@ static int cmd_wget(RCore *core, const char *input) {
 		fname ++;
 	}
 	int len = 0;
-	char *data = r_socket_http_get (input, NULL, &len);
+	char *data = r_socket_http_get (input, NULL, NULL, &len);
 	if (data) {
 		if (!r_file_dump (fname, (const ut8*)data, len, 0)) {
 			R_LOG_ERROR ("Cannot save file to disk");
@@ -1951,10 +1953,15 @@ static int cmd_ww(void *data, const char *input) {
 	str++;
 	len = (len - 1) << 1;
 	char *tmp = (len > 0) ? malloc (len + 1) : NULL;
+	bool be = r_config_get_b (core->config, "cfg.bigendian");
 	if (tmp) {
 		int i;
 		for (i = 0; i < len; i++) {
-			if (i % 2) {
+			bool match = i % 2;
+			if (be) {
+				match = !match;
+			}
+			if (match) {
 				tmp[i] = 0;
 			} else {
 				tmp[i] = str[i >> 1];
@@ -2047,14 +2054,63 @@ static int cmd_wx(void *data, const char *input) {
 	return 0;
 }
 
+static bool asm_patch(RCore *core, const char *op, int mode) {
+	R_RETURN_VAL_IF_FAIL (core && op, false);
+	const char *asmarch = r_config_get (core->config, "asm.arch");
+	const bool doseek = (*op == '+');
+	if (doseek) {
+		op++;
+		mode = *op;
+	}
+	if (!asmarch) {
+		return false;
+	}
+	if (core->blocksize < 4) {
+		return false;
+	}
+	{
+		RAnalOp aop = { .addr = core->offset };
+		r_anal_op_set_bytes (&aop, core->offset, core->block, 4);
+		// TODO: use r_arch_decode
+		if (!r_anal_op (core->anal, &aop, core->offset, core->block, core->blocksize, R_ARCH_OP_MASK_BASIC)) {
+			R_LOG_ERROR ("anal op fail");
+			r_anal_op_fini (&aop);
+			return false;
+		}
+		char *cmd = r_asm_parse_patch (core->rasm, &aop, op);
+		if (cmd) {
+			switch (mode) {
+			case '*': r_cons_println (cmd); break;
+			case 'l': r_cons_printf ("%d\n", (int)(strlen (cmd) - 3)/2); break;
+			default: r_core_cmd0 (core, cmd); break;
+			}
+			free (cmd);
+		} else {
+			R_LOG_ERROR ("No asm.patch possible");
+		}
+		r_anal_op_fini (&aop);
+		if (doseek) {
+			r_core_seek (core, core->offset + aop.size, 1);
+		}
+		return true;
+	}
+	return false;
+}
+
 static int cmd_wa(void *data, const char *input) {
 	RCore *core = (RCore *)data;
 	switch (input[0]) {
 	case 'o': // "wao"
-		if (input[1] == ' ' || input[1] == '+') {
-			r_core_hack (core, r_str_trim_head_ro (input + 1));
-		} else {
+		switch (input[1]) {
+		case ' ':
+		case '*':
+		case 'l':
+		case '+':
+			asm_patch (core, r_str_trim_head_ro (input + 1), input[1]);
+			break;
+		default:
 			r_core_cmd_help (core, help_msg_wao);
+			break;
 		}
 		break;
 	case ' ':
@@ -2072,7 +2128,7 @@ static int cmd_wa(void *data, const char *input) {
 				ut64 at = core->offset;
 repeat:
 				if (!r_anal_op (core->anal, &analop, at, core->block + delta, core->blocksize - delta, R_ARCH_OP_MASK_BASIC)) {
-					R_LOG_DEBUG ("Invalid instruction?");
+					R_LOG_ERROR ("Invalid instruction?");
 					r_anal_op_fini (&analop);
 					r_asm_code_free (acode);
 					break;
@@ -2090,13 +2146,13 @@ repeat:
 			} else if (input[0] == 'i') { // "wai"
 				RAnalOp analop;
 				if (!r_anal_op (core->anal, &analop, core->offset, core->block, core->blocksize, R_ARCH_OP_MASK_BASIC)) {
-					R_LOG_DEBUG ("Invalid instruction?");
+					R_LOG_ERROR ("Invalid instruction?");
 					r_anal_op_fini (&analop);
 					r_asm_code_free (acode);
 					break;
 				}
 				if (analop.size < acode->len) {
-					R_LOG_DEBUG ("Doesnt fit");
+					R_LOG_ERROR ("Patch doesnt fit");
 					r_anal_op_fini (&analop);
 					r_asm_code_free (acode);
 					break;
@@ -2113,7 +2169,8 @@ repeat:
 						cmd_write_fail (core);
 					} else {
 						if (r_config_get_b (core->config, "scr.prompt")) { // maybe check interactive?
-							R_LOG_INFO ("Written %d byte(s) (%s) = wx %s @ 0x%08"PFMT64x, acode->len, input + 1, hex, core->offset);
+							const char *arg = r_str_trim_head_ro (input + 1);
+							R_LOG_INFO ("Written %d byte(s) (%s) = wx %s @ 0x%08"PFMT64x, acode->len, arg, hex, core->offset);
 						}
 						WSEEK (core, acode->len);
 					}

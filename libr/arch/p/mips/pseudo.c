@@ -1,14 +1,9 @@
-/* radare - LGPL - Copyright 2012-2017 - pancake */
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+/* radare - LGPL - Copyright 2012-2024 - pancake */
 
 #include <r_lib.h>
-#include <r_util.h>
 #include <r_flag.h>
 #include <r_anal.h>
-#include <r_parse.h>
+#include <r_asm.h>
 
 static int can_replace(const char *str, int idx, int max_operands) {
 	if (str[idx] > '9' || str[idx] < '1') {
@@ -126,8 +121,16 @@ static int replace(int argc, const char *argv[], char *newstr) {
 	return false;
 }
 
+#define REPLACE(x,y) do { \
+	int snprintf_len1_ = snprintf (a, 32, x, w1, w1); \
+	int snprintf_len2_ = snprintf (b, 32, y, w1);	\
+	if (snprintf_len1_ < 32 && snprintf_len2_ < 32) { \
+		p = r_str_replace (p, a, b, 0); \
+	} \
+} while (0)
 #define WSZ 64
-static int parse(RParse *p, const char *data, char *str) {
+
+static char *parse(RAsmPluginSession *aps, const char *data) {
 	int i, len = strlen (data);
 	char w0[WSZ];
 	char w1[WSZ];
@@ -137,20 +140,19 @@ static int parse(RParse *p, const char *data, char *str) {
 	char *buf, *ptr, *optr;
 
 	if (!strcmp (data, "jr ra")) {
-		strcpy (str, "ret");
-		return true;
+		return strdup ("ret");
 	}
 
 	// malloc can be slow here :?
 	if (!(buf = malloc (len + 1))) {
-		return false;
+		return NULL;
 	}
-	memcpy (buf, data, len+1);
+	memcpy (buf, data, len + 1);
 
 	r_str_replace_char (buf, '(', ',');
 	r_str_replace_char (buf, ')', ' ');
 	r_str_trim (buf);
-
+	char *str = NULL;
 	if (*buf) {
 		w0[0]='\0';
 		w1[0]='\0';
@@ -178,7 +180,7 @@ static int parse(RParse *p, const char *data, char *str) {
 				}
 				strncpy (w1, optr, WSZ - 1);
 				strncpy (w2, ptr, WSZ - 1);
-				optr=ptr;
+				optr = ptr;
 				ptr = strchr (ptr, ',');
 				if (ptr) {
 					*ptr = '\0';
@@ -211,50 +213,47 @@ static int parse(RParse *p, const char *data, char *str) {
 					nw++;
 				}
 			}
+			str = malloc (strlen (data) + 128);
+			strcpy (str, data);
 			replace (nw, wa, str);
-{
-	char *p = strdup (str);
-	p = r_str_replace (p, "+ -", "- ", 0);
-	p = r_str_replace (p, " + ]", " + 0]", 0);
+			{
+				char *p = strdup (str);
+				p = r_str_replace (p, "+ -", "- ", 0);
+				p = r_str_replace (p, " + ]", " + 0]", 0);
 
-	p = r_str_replace (p, "zero", "0", 1);
-	if (!strncmp (p, "0 = ", 4)) {
-		*p = 0; // nop
-	}
-	if (!strcmp (w1, w2)) {
-		char a[32], b[32];
-#define REPLACE(x,y) do { \
-		int snprintf_len1_ = snprintf (a, 32, x, w1, w1); \
-		int snprintf_len2_ = snprintf (b, 32, y, w1);	\
-		if (snprintf_len1_ < 32 && snprintf_len2_ < 32) { \
-			p = r_str_replace (p, a, b, 0); \
-		} \
-	} while (0)
+				p = r_str_replace (p, "zero", "0", 1);
+				if (!strncmp (p, "0 = ", 4)) {
+					*p = 0; // nop
+				}
+				if (!strcmp (w1, w2)) {
+					char a[32], b[32];
 
-		// TODO: optimize
-		REPLACE ("%s = %s +", "%s +=");
-		REPLACE ("%s = %s -", "%s -=");
-		REPLACE ("%s = %s &", "%s &=");
-		REPLACE ("%s = %s |", "%s |=");
-		REPLACE ("%s = %s ^", "%s ^=");
-		REPLACE ("%s = %s >>", "%s >>=");
-		REPLACE ("%s = %s <<", "%s <<=");
-	}
-	p = r_str_replace (p, ":", "0000", 0);
-	strcpy (str, p);
-	free (p);
-}
+					// TODO: optimize
+					REPLACE ("%s = %s +", "%s +=");
+					REPLACE ("%s = %s -", "%s -=");
+					REPLACE ("%s = %s &", "%s &=");
+					REPLACE ("%s = %s |", "%s |=");
+					REPLACE ("%s = %s ^", "%s ^=");
+					REPLACE ("%s = %s >>", "%s >>=");
+					REPLACE ("%s = %s <<", "%s <<=");
+				}
+				p = r_str_replace (p, ":", "0000", 0);
+				strcpy (str, p);
+				free (p);
+			}
 		}
 	}
 	free (buf);
-	return true;
+	return str;
 }
 
-static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len) {
+static char *subvar(RAsmPluginSession *aps, RAnalFunction *f, ut64 addr, int oplen, const char *data) {
+	RAsm *a = aps->rasm;
+	RParse *p = a->parse;
 	RListIter *iter;
 	char *oldstr;
 	char *tstr = strdup (data);
-	RAnal *anal = p->analb.anal;
+	RAnal *anal = a->analb.anal;
 
 	if (f && p->varlist) {
 		RList *bpargs = p->varlist (f, 'b');
@@ -275,7 +274,7 @@ static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data
 				reg = p->get_reg_at (f, var->delta, addr);
 			}
 			if (!reg) {
-				reg = anal->reg->name[R_REG_NAME_SP];
+				reg = anal->reg->alias[R_REG_ALIAS_SP];
 			}
 			char *tmpf;
 			//TODO: honor asm pseudo
@@ -321,7 +320,7 @@ static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data
 				reg = p->get_reg_at (f, var->delta, addr);
 			}
 			if (!reg) {
-				reg = anal->reg->name[R_REG_NAME_BP];
+				reg = anal->reg->alias[R_REG_ALIAS_BP];
 			}
 			if (R_ABS (delta) < 10) {
 				tmpf = "%d(%s)";
@@ -353,30 +352,24 @@ static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data
 		r_list_free (bpargs);
 		r_list_free (spargs);
 	}
-	bool ret = true;
-	if (len > strlen (tstr)) {
-		strcpy (str, tstr);
-	} else {
-		// TOO BIG STRING CANNOT REPLACE HERE
-		ret = false;
-	}
-	free (tstr);
-	return ret;
+	return tstr;
 }
 
-RParsePlugin r_parse_plugin_mips_pseudo = {
-	.name = "mips.pseudo",
-	.desc = "MIPS pseudo syntax",
-	.init = NULL,
-	.fini = NULL,
+RAsmPlugin r_asm_plugin_mips = {
+	.meta = {
+		.name = "mips",
+		.desc = "MIPS pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.parse = parse,
 	.subvar = subvar,
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_mips_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_mips,
 	.version = R2_VERSION
 };
 #endif

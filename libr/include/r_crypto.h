@@ -68,7 +68,7 @@ typedef struct r_crypto_job_t {
 
 typedef enum {
 	R_CRYPTO_TYPE_ENCODER = 'e',
-	R_CRYPTO_TYPE_HASHER = 'h',
+	R_CRYPTO_TYPE_HASH = 'h',
 	R_CRYPTO_TYPE_ENCRYPT = 'c', // CIPHER
 	R_CRYPTO_TYPE_SIGNATURE = 's',
 	R_CRYPTO_TYPE_ALL = 'a'
@@ -103,7 +103,7 @@ R_API void r_crypto_init(RCrypto *cry);
 R_API bool r_crypto_add(RCrypto *cry, RCryptoPlugin *h);
 R_API RCrypto *r_crypto_new(void);
 R_API void r_crypto_free(RCrypto *cry);
-R_API void r_crypto_list(RCrypto *cry, PrintfCallback cb_printf, int mode);
+R_API void r_crypto_list(RCrypto *cry, PrintfCallback cb_printf, int mode, RCryptoType type);
 
 // R_API RCryptoHash *r_crypto_hash(RCrypto *cry, bool rst, const char *name);
 
@@ -122,27 +122,29 @@ R_API ut8 *r_crypto_job_get_output(RCryptoJob *cry, int *size);
 #endif
 
 /* plugin pointers */
-extern RCryptoPlugin r_crypto_plugin_strhash;
 extern RCryptoPlugin r_crypto_plugin_aes;
-extern RCryptoPlugin r_crypto_plugin_des;
-extern RCryptoPlugin r_crypto_plugin_rc4;
-extern RCryptoPlugin r_crypto_plugin_xor;
+extern RCryptoPlugin r_crypto_plugin_aes_cbc;
+extern RCryptoPlugin r_crypto_plugin_aes_wrap;
+extern RCryptoPlugin r_crypto_plugin_base64;
+extern RCryptoPlugin r_crypto_plugin_base91;
+extern RCryptoPlugin r_crypto_plugin_bech32;
 extern RCryptoPlugin r_crypto_plugin_blowfish;
+extern RCryptoPlugin r_crypto_plugin_cps2;
+extern RCryptoPlugin r_crypto_plugin_des;
+extern RCryptoPlugin r_crypto_plugin_ed25519;
+extern RCryptoPlugin r_crypto_plugin_entropy;
+extern RCryptoPlugin r_crypto_plugin_punycode;
 extern RCryptoPlugin r_crypto_plugin_rc2;
+extern RCryptoPlugin r_crypto_plugin_rc4;
+extern RCryptoPlugin r_crypto_plugin_rc6;
 extern RCryptoPlugin r_crypto_plugin_rot;
 extern RCryptoPlugin r_crypto_plugin_rol;
 extern RCryptoPlugin r_crypto_plugin_ror;
-extern RCryptoPlugin r_crypto_plugin_base64;
-extern RCryptoPlugin r_crypto_plugin_base91;
-extern RCryptoPlugin r_crypto_plugin_aes_cbc;
-extern RCryptoPlugin r_crypto_plugin_punycode;
-extern RCryptoPlugin r_crypto_plugin_rc6;
-extern RCryptoPlugin r_crypto_plugin_cps2;
 extern RCryptoPlugin r_crypto_plugin_serpent;
+extern RCryptoPlugin r_crypto_plugin_sip;
 extern RCryptoPlugin r_crypto_plugin_sm4;
-extern RCryptoPlugin r_crypto_plugin_aes_wrap;
-extern RCryptoPlugin r_crypto_plugin_ed25519;
-extern RCryptoPlugin r_crypto_plugin_entropy;
+extern RCryptoPlugin r_crypto_plugin_strhash;
+extern RCryptoPlugin r_crypto_plugin_xor;
 
 #define R_CRYPTO_NONE 0ULL
 #define R_CRYPTO_RC2 1ULL
@@ -160,6 +162,7 @@ extern RCryptoPlugin r_crypto_plugin_entropy;
 #define R_CRYPTO_XOR 1ULL<<12
 #define R_CRYPTO_SERPENT 1ULL<<13
 #define R_CRYPTO_SM4_ECB  1ULL << 14
+#define R_CRYPTO_BECH32   1ULL << 15
 #define R_CRYPTO_ALL 0xFFFF
 
 #define R_CODEC_NONE 0ULL

@@ -20,6 +20,12 @@ static const char *level_tags[] = { // Log level to tag string lookup array
 	[R_LOG_LEVEL_DEBUG]     = "DEBUG",
 };
 
+#if R2_600
+R_API const char *r_log_level_fromstring(int i) {
+	// TODO. see libr/core/cconfig.c:3340
+}
+#endif
+
 R_API const char *r_log_level_tostring(int i) {
 	if (i >= 0 && i < R_LOG_LEVEL_LAST) {
 		return level_tags[i];
@@ -240,11 +246,6 @@ R_API void r_log_add_callback(RLogCallback cb, void *user) {
 	if (!rlog->cbs) {
 		rlog->cbs = r_list_newf (free);
 	}
-#if !R2_USE_NEW_ABI
-	if (user) {
-		rlog->user = user;
-	}
-#endif
 	RLogCallbackUser *cbu = R_NEW (RLogCallbackUser);
 	cbu->cb = cb;
 	cbu->user = user;

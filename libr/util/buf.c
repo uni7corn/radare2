@@ -4,27 +4,13 @@
 #include <r_util.h>
 #include <r_io.h>
 
-#if !R2_USE_NEW_ABI
-typedef enum {
-	R_BUFFER_FILE,
-	R_BUFFER_IO,
-	R_BUFFER_BYTES,
-	R_BUFFER_MMAP,
-	R_BUFFER_SPARSE,
-	R_BUFFER_REF,
-} RBufferType;
-#endif
-
 #include "buf_file.c"
 #include "buf_sparse.c"
 #include "buf_bytes.c"
 #include "buf_mmap.c"
 #include "buf_io.c"
 #include "buf_ref.c"
-
-#if R2_USE_NEW_ABI
 #include "buf_cache.c"
-#endif
 
 static bool buf_init(RBuffer *b, const void *user) {
 	R_RETURN_VAL_IF_FAIL (b && b->methods, false);
@@ -114,11 +100,9 @@ static RBuffer *new_buffer(RBufferType type, const void *user) {
 	case R_BUFFER_MMAP:
 		b->methods = &buffer_mmap_methods;
 		break;
-#if R2_USE_NEW_ABI
 	case R_BUFFER_CACHE:
 		b->methods = &buffer_cache_methods;
 		break;
-#endif
 	case R_BUFFER_SPARSE:
 		b->methods = &buffer_sparse_methods;
 		break;
@@ -132,7 +116,7 @@ static RBuffer *new_buffer(RBufferType type, const void *user) {
 		b->methods = &buffer_ref_methods;
 		break;
 	default:
-		r_warn_if_reached ();
+		R_WARN_IF_REACHED ();
 		break;
 	}
 	if (!buf_init (b, user)) {
@@ -149,17 +133,12 @@ static RBuffer *new_buffer(RBufferType type, const void *user) {
 // ret # of bytes copied
 R_API RBuffer *r_buf_new_with_io(void *iob, int fd) {
 	R_RETURN_VAL_IF_FAIL (iob && fd >= 0, NULL);
-	struct buf_io_user u = {0};
-	u.iob = (RIOBind *)iob;
-	u.fd = fd;
+	RBufferIO u = {(RIOBind *)iob, fd};
 	return new_buffer (R_BUFFER_IO, &u);
 }
 
 R_API RBuffer *r_buf_new_with_pointers(const ut8 *bytes, ut64 len, bool steal) {
-	struct buf_bytes_user u = {0};
-	u.data_steal = bytes;
-	u.length = len;
-	u.steal = steal;
+	struct buf_bytes_user u = {.data_steal = bytes, .length = len, .steal = steal};
 	return new_buffer (R_BUFFER_BYTES, &u);
 }
 
@@ -169,10 +148,7 @@ R_API RBuffer *r_buf_new_empty(ut64 len) {
 		return NULL;
 	}
 
-	struct buf_bytes_user u = {0};
-	u.data_steal = buf;
-	u.length = len;
-	u.steal = true;
+	struct buf_bytes_user u = {.data_steal = buf, .length = len, .steal = true};
 	RBuffer *res = new_buffer (R_BUFFER_BYTES, &u);
 	if (!res) {
 		free (buf);
@@ -181,17 +157,12 @@ R_API RBuffer *r_buf_new_empty(ut64 len) {
 }
 
 R_API RBuffer *r_buf_new_with_bytes(const ut8 *bytes, ut64 len) {
-	struct buf_bytes_user u = {0};
-	u.data = bytes;
-	u.length = len;
+	struct buf_bytes_user u = {.data = bytes, .length = len};
 	return new_buffer (R_BUFFER_BYTES, &u);
 }
 
 R_API RBuffer *r_buf_new_slice(RBuffer *b, ut64 offset, ut64 size) {
-	struct buf_ref_user u = {0};
-	u.parent = b;
-	u.offset = offset;
-	u.size = size;
+	struct buf_ref_user u = {b, offset, size};
 	return new_buffer (R_BUFFER_REF, &u);
 }
 
@@ -213,23 +184,15 @@ R_API RBuffer *r_buf_new_sparse(ut8 Oxff) {
 	return b;
 }
 
-#if R2_USE_NEW_ABI
 R_API RBuffer *r_buf_new_with_cache(RBuffer *sb, bool steal) {
 	RBuffer *b = new_buffer (R_BUFFER_CACHE, NULL);
 	if (b) {
-		struct minicachebuf {
-			RBuffer *sb;
-			bool owned;
-			ut64 length;
-		};
-		struct minicachebuf *mcb = b->priv;
-		mcb->sb = sb;
-		mcb->owned = steal;
-		mcb->length = r_buf_size (sb);
+		b->rb_cache->sb = sb;
+		b->rb_cache->is_bufowner = steal;
+		b->rb_cache->length = r_buf_size (sb);
 	}
 	return b;
 }
-#endif
 
 R_API RBuffer *r_buf_new(void) {
 	struct buf_bytes_user u = {0};
@@ -252,22 +215,16 @@ R_API ut64 r_buf_size(RBuffer *b) {
 // rename to new?
 R_API RBuffer *r_buf_new_mmap(const char *filename, int perm) {
 	R_RETURN_VAL_IF_FAIL (filename, NULL);
-	struct buf_mmap_user u = {0};
-	u.filename = filename;
-	u.perm = perm;
+	struct buf_mmap_user u = {filename, perm};
 	return new_buffer (R_BUFFER_MMAP, &u);
 }
 
 R_API RBuffer *r_buf_new_file(const char *file, int perm, int mode) {
-	struct buf_file_user u = {0};
-	u.file = file;
-	u.perm = perm;
-	u.mode = mode;
+	struct buf_file_user u = {file, perm, mode};
 	return new_buffer (R_BUFFER_FILE, &u);
 }
 
-// R2_600 : rename to new_from_file ?
-R_API RBuffer *r_buf_new_slurp(const char *file) {
+R_API RBuffer *r_buf_new_from_file(const char *file) {
 	size_t len;
 	char *tmp = r_file_slurp (file, &len);
 	if (!tmp) {
@@ -319,7 +276,6 @@ R_API bool r_buf_prepend_bytes(RBuffer *b, const ut8 *buf, ut64 length) {
 	return r_buf_insert_bytes (b, 0, buf, length) >= 0;
 }
 
-// R2_600 - drain ?
 R_API char *r_buf_tostring(RBuffer *b) {
 	ut64 sz = r_buf_size (b);
 	char *s = malloc (sz + 1);
@@ -332,6 +288,15 @@ R_API char *r_buf_tostring(RBuffer *b) {
 	}
 	s[sz] = '\0';
 	return s;
+}
+
+R_API ut8 *r_buf_drain(RBuffer *b, ut64 *size) {
+	if (size) {
+		*size = r_buf_size (b);
+	}
+	ut8 *res = (ut8 *)r_buf_tostring (b);
+	r_buf_free (b);
+	return res;
 }
 
 R_API bool r_buf_append_bytes(RBuffer *b, const ut8 *buf, ut64 length) {
@@ -808,7 +773,6 @@ R_API st64 r_buf_sleb128(RBuffer *b, st64 *v) {
 	return offset / 7;
 }
 
-#if R2_USE_NEW_ABI
 R_API char *r_buf_describe(RBuffer *b) {
 	const char *type = "unknown";
 	switch (b->type) {
@@ -836,4 +800,3 @@ R_API char *r_buf_describe(RBuffer *b) {
 	}
 	return r_str_newf ("RBuffer<%s>(.%s) @ %p", type, b->readonly? "ro": "rw", b);
 }
-#endif

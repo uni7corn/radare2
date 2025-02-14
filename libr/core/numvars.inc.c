@@ -346,15 +346,16 @@ static ut64 numvar_bb(RCore *core, const char *str, int *ok) {
 			ut64 at = r_num_get (&nn, name);
 			R_FREE (name);
 			// TODO check numerrors
-			if (at && at != UT64_MAX) {
-				bb = r_anal_get_block_at (core->anal, at);
-			} else {
+			if (!at || at == UT64_MAX) {
 				return invalid_numvar (core, "cant find basic block");
 			}
+			// bb = r_anal_get_block_at (core->anal, at); // only works at the bb addr
+			bb = r_anal_bb_from_offset (core->anal, at);
 		}
 		R_FREE (name);
 	} else {
-		bb = r_anal_get_block_at (core->anal, core->offset);
+		bb = r_anal_bb_from_offset (core->anal, core->offset);
+		// bb = r_anal_get_block_at (core->anal, core->offset);
 	}
 	if (!bb) {
 		return invalid_numvar (core, "cant find basic block");
@@ -369,7 +370,8 @@ static ut64 numvar_bb(RCore *core, const char *str, int *ok) {
 	case 'D': return core->offset - bb->addr;
 	case 'E': return bb->addr + bb->size;
 	case 'S': return bb->size;
-	case 'I': return bb->ninstr;
+	case 'I':
+	case 'i': return bb->ninstr;
 	case 'J':
 	case 'j': return bb->jump;
 	case 'F':
@@ -528,7 +530,6 @@ static ut64 numvar_maps(RCore *core, const char *str, int *ok) {
 			}
 			// invalid
 		}
-		R_FREE (name);
 	}
 	RIOMap *map = NULL;
 	if (name) {
@@ -538,7 +539,7 @@ static ut64 numvar_maps(RCore *core, const char *str, int *ok) {
 			map = r_io_map_get_at (core->io, at);
 		} else {
 			MapLoopData mld = { .name = name };
-			r_id_storage_foreach (core->io->maps, mapscb, &mld);
+			r_id_storage_foreach (&core->io->maps, mapscb, &mld);
 			map = mld.map;
 		}
 		R_FREE (name);
@@ -560,7 +561,7 @@ static ut64 numvar_maps(RCore *core, const char *str, int *ok) {
 	case 'e':
 	case 'E': return r_io_map_end (map);
 	case 'S': return r_io_map_size (map);
-	case 'M':
+	case 'M': // "MM"
 		  {
 			  ut64 lower = r_io_map_begin (map);
 			  const int clear_bits = 16;
@@ -734,7 +735,7 @@ static ut64 numvar_flag(RCore *core, const char *str, int *ok) {
 		free (name);
 	}
 	if (!fi) {
-		fi = r_flag_get_i (core->flags, addr);
+		fi = r_flag_get_in (core->flags, addr);
 		if (!fi) {
 			fi = r_flag_get_at (core->flags, core->offset, true);
 		}
@@ -1015,23 +1016,8 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 			}
 
 			// check for reg alias
-			struct r_reg_item_t *r = r_reg_get (core->dbg->reg, str, -1);
-			if (!r) {
-				int role = r_reg_get_name_idx (str);
-				if (role != -1) {
-					const char *alias = r_reg_get_name (core->dbg->reg, role);
-					if (alias) {
-						r = r_reg_get (core->dbg->reg, alias, -1);
-						if (r) {
-							if (ok) {
-								*ok = true;
-							}
-							ret = r_reg_get_value (core->dbg->reg, r);
-							return ret;
-						}
-					}
-				}
-			} else {
+			RRegItem *r = r_reg_get (core->dbg->reg, str, -1);
+			if (r) {
 				if (ok) {
 					*ok = true;
 				}

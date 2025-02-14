@@ -1,6 +1,7 @@
 /* radare - LGPL - Copyright 2009-2024 - nibble, pancake */
 
-#include <r_parse.h>
+#include <r_asm.h>
+
 // 16 bit examples
 //    0x0001f3a4      9a67620eca       call word 0xca0e:0x6267
 //    0x0001f41c      eabe76de12       jmp word 0x12de:0x76be [2]
@@ -8,9 +9,9 @@
 
 // XXX seems like '(#)' doesnt works.. so it needs to be '( # )'
 // this is a bug somewhere else
-static bool replace(int argc, char *argv[], char *newstr) {
+static char *replace(int argc, char *argv[]) {
 #define MAXPSEUDOOPS 10
-	int i, j, k, d;
+	int i, j, d;
 	char ch;
 	struct {
 		const char *op;
@@ -119,8 +120,7 @@ static bool replace(int argc, char *argv[], char *newstr) {
 	};
 	if (argc == 1) {
 		if (argv[0][0] && !argv[0][1]) {
-			*newstr = 0;
-			return true;
+			return strdup ("");
 		}
 	}
 
@@ -130,6 +130,7 @@ static bool replace(int argc, char *argv[], char *newstr) {
 			argv[2] = "0";
 		}
 	}
+	RStrBuf *sb = r_strbuf_new ("");
 	for (i = 0; ops[i].op; i++) {
 		if (strcmp (ops[i].op, argv[0])) {
 			continue;
@@ -137,7 +138,7 @@ static bool replace(int argc, char *argv[], char *newstr) {
 		d = 0;
 		j = 0;
 		ch = ops[i].str[j];
-		for (j = 0, k = 0; ch != '\0'; j++, k++) {
+		for (j = 0; ch != '\0'; j++) {
 			ch = ops[i].str[j];
 			if (ch == '#') {
 				if (d >= MAXPSEUDOOPS) {
@@ -151,47 +152,43 @@ static bool replace(int argc, char *argv[], char *newstr) {
 				}
 				const char *w = argv[idx];
 				if (w) {
-					strcpy (newstr + k, w);
-					k += strlen (w) - 1;
+					r_strbuf_append (sb, w);
 				}
 			} else {
-				newstr[k] = ch;
+				r_strbuf_append_n (sb, &ch, 1);
 			}
 		}
-		newstr[k] = '\0';
-		return true;
+		return r_strbuf_drain (sb);
 	}
 
-	RStrBuf *sb = r_strbuf_new ("");
 	for (i = 0; i < argc; i++) {
 		r_strbuf_append (sb, argv[i]);
-		r_strbuf_append (sb, (i == argc - 1)?"":" ");
+		r_strbuf_append (sb, (i == argc - 1)? "": " ");
 	}
-	char *sbs = r_strbuf_drain (sb);
-	strcpy (newstr, sbs);
-	free (sbs);
-	return false;
+	return r_strbuf_drain (sb);
 }
 
-static int parse(RParse *p, const char *data, char *str) {
+static char *parse(RAsmPluginSession *aps, const char *data) {
+	RParse *p = aps->rasm->parse;
 	char w0[256], w1[256], w2[256], w3[256];
 	int i;
 	size_t len = strlen (data);
 	int sz = 32;
 	char *ptr, *optr, *end;
 	if (len >= sizeof (w0) || sz >= sizeof (w0)) {
-		return false;
+		return NULL;
 	}
 	// strdup can be slow here :?
 	char *buf = strdup (data);
 	if (!buf) {
-		return false;
+		return NULL;
 	}
 	*w0 = *w1 = *w2 = *w3 = '\0';
 	if (strchr (data, '(')) {
 		// avoid double-pseudo calls
-		return false;
+		return NULL;
 	}
+	char *str = NULL;
 	if (*buf) {
 		end = buf + strlen (buf);
 		ptr = strchr (buf, '(');
@@ -254,11 +251,10 @@ static int parse(RParse *p, const char *data, char *str) {
 		}
 	}
 	/* TODO: interpretation of memory location fails*/
-	//ensure imul & mul interpretations works
+	// ensure imul & mul interpretations works
 	if (strstr (w0, "mul")) {
 		if (nw == 2) {
 			r_str_ncpy (wa[3], wa[1], sizeof (w3));
-
 			switch (wa[3][0]) {
 			case 'q':
 			case 'r': //qword, r..
@@ -286,32 +282,32 @@ static int parse(RParse *p, const char *data, char *str) {
 			r_str_ncpy (wa[3], wa[2], sizeof (w3));
 			r_str_ncpy (wa[2], wa[1], sizeof (w2));
 		}
-		replace (nw, wa, str);
+		str = replace (nw, wa);
 	} else if (strstr (w0, "lea")) {
 		r_str_replace_char (w2, '[', 0);
 		r_str_replace_char (w2, ']', 0);
-		replace (nw, wa, str);
+		str = replace (nw, wa);
 	} else if ((strstr (w1, "ax") || strstr (w1, "ah") || strstr (w1, "al")) && !p->retleave_asm) {
-		if (!(p->retleave_asm = (char *) malloc (sz))) {
-			return false;
-		}
-		r_snprintf (p->retleave_asm, sz, "return %s", w2);
-		replace (nw, wa, str);
+		p->retleave_asm = r_str_newf ("return %s", w2);
+		str = replace (nw, wa);
 	} else if (strstr (w0, "ret") && p->retleave_asm) {
-		r_str_ncpy (str, p->retleave_asm, sz);
+		str = strdup (p->retleave_asm);
 		R_FREE (p->retleave_asm);
 	} else if (p->retleave_asm) {
 		R_FREE (p->retleave_asm);
-		replace (nw, wa, str);
+		str = replace (nw, wa);
 	} else {
-		replace (nw, wa, str);
+		str = replace (nw, wa);
 	}
-	r_str_fixspaces (str);
+	if (str) {
+		str = r_str_fixspaces (str);
+	}
 	free (buf);
-	return true;
+	return str;
 }
 
-static void parse_localvar(RParse *p, char *newstr, size_t newstr_len, const char *var, const char *reg, char sign, char *ireg, bool att) {
+static void parse_localvar(RAsm *a, char *newstr, size_t newstr_len, const char *var, const char *reg, char sign, char *ireg, bool att) {
+	RParse *p = a->parse;
 	RStrBuf *sb = r_strbuf_new ("");
 	if (att) {
 		if (p->localvar_only) {
@@ -366,14 +362,87 @@ static void mk_reg_str(const char *regname, int delta, bool sign, bool att, char
 	r_strbuf_free (sb);
 }
 
-// static char *subvar(RParse *p, RAnalFunction *f, RAnalOp *op) {
-static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len) {
-	RAnal *anal = p->analb.anal;
+static char *patch(RAsmPluginSession *aps, RAnalOp *aop, const char *op) {
+	const ut8 *b = aop->bytes; // core->block;
+	int i, size = aop->size;
+	char *hcmd = NULL;
+	const char *cmd = NULL;
+	if (!strcmp (op, "nop")) {
+		if (size * 2 + 1 < size) {
+			R_LOG_ERROR ("Cant fit a nop in here");
+			return false;
+		}
+		char *hcmd = malloc ((size * 2) + 5);
+		if (!hcmd) {
+			return false;
+		}
+		strcpy (hcmd, "wx ");
+		for (i = 0; i < size; i++) {
+			memcpy (hcmd + 3 + (i * 2), "90", 2);
+		}
+		cmd = hcmd;
+		hcmd[3 + (size * 2)] = '\0';
+	} else if (!strcmp (op, "trap")) {
+		cmd = "wx cc";
+	} else if (!strcmp (op, "jz") || !strcmp (op, "je")) {
+		if (b[0] == 0x75) {
+			cmd = "wx 74";
+		} else {
+			R_LOG_ERROR ("Current opcode is not conditional");
+		}
+	} else if (!strcmp (op, "jinf")) {
+		cmd = "wx ebfe";
+	} else if (!strcmp (op, "jnz") || !strcmp (op, "jne")) {
+		if (b[0] == 0x74) {
+			cmd = "wx 75";
+		} else {
+			R_LOG_ERROR ("Current opcode is not conditional");
+		}
+	} else if (!strcmp (op, "nocj")) {
+		if (*b == 0xf) {
+			cmd = "wx 90e9";
+		} else if (b[0] >= 0x70 && b[0] <= 0x7f) {
+			cmd = "wx eb";
+		} else {
+			R_LOG_ERROR ("Current opcode is not conditional");
+		}
+	} else if (!strcmp (op, "recj")) {
+		int is_near = (*b == 0xf);
+		if (b[0] < 0x80 && b[0] >= 0x70) { // short jmps: jo, jno, jb, jae, je, jne, jbe, ja, js, jns
+			cmd = hcmd = r_str_newf ("wx %x", (b[0]%2)? b[0] - 1: b[0] + 1);
+		} else if (is_near && b[1] < 0x90 && b[1] >= 0x80) { // near jmps: jo, jno, jb, jae, je, jne, jbe, ja, js, jns
+			cmd = hcmd = r_str_newf ("wx 0f%x", (b[1]%2)? b[1] - 1: b[1] + 1);
+		} else {
+			R_LOG_ERROR ("Invalid conditional jump opcode");
+		}
+	} else if (!strcmp (op, "ret1")) {
+		cmd = "wx c20100";
+	} else if (!strcmp (op, "ret0")) {
+		cmd = "wx c20000";
+	} else if (!strcmp (op, "retn")) {
+		cmd = "wx c2ffff";
+	} else {
+		R_LOG_ERROR ("Invalid operation '%s'", op);
+	}
+	if (cmd) {
+		if (hcmd) {
+			return hcmd;
+		}
+		return strdup (cmd);
+	}
+	free (hcmd);
+	return NULL;
+}
+
+static char *subvar(RAsmPluginSession *aps, RAnalFunction *f, ut64 addr, int oplen, const char *data) {
+	RAsm *a = aps->rasm;
+	RParse *p = a->parse;
+	RAnal *anal = a->analb.anal;
 	RListIter *bpargiter, *spiter;
 	char oldstr[64], newstr[64];
 	char *tstr = strdup (data);
 	if (!tstr) {
-		return false;
+		return NULL;
 	}
 
 	bool att = strchr (data, '%');
@@ -461,14 +530,14 @@ static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data
 				reg = p->get_reg_at (f, sparg->delta, addr);
 			}
 			if (!reg) {
-				reg = anal->reg->name[R_REG_NAME_SP];
+				reg = anal->reg->alias[R_REG_ALIAS_SP];
 			}
 			mk_reg_str (reg, delta, sign == '+', att, ireg, oldstr, sizeof (oldstr));
 
 			if (ucase) {
 				r_str_case (oldstr, true);
 			}
-			parse_localvar (p, newstr, sizeof (newstr), sparg->name, reg, sign, ireg, att);
+			parse_localvar (a, newstr, sizeof (newstr), sparg->name, reg, sign, ireg, att);
 			char *ptr = strstr (tstr, oldstr);
 			if (ptr && (!att || *(ptr - 1) == ' ')) {
 				if (delta == 0) {
@@ -509,13 +578,13 @@ static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data
 				reg = p->get_reg_at (f, bparg->delta, addr);
 			}
 			if (!reg) {
-				reg = anal->reg->name[R_REG_NAME_BP];
+				reg = anal->reg->alias[R_REG_ALIAS_BP];
 			}
 			mk_reg_str (reg, delta, sign == '+', att, ireg, oldstr, sizeof (oldstr));
 			if (ucase) {
 				r_str_case (oldstr, true);
 			}
-			parse_localvar (p, newstr, sizeof (newstr), bparg->name, reg, sign, ireg, att);
+			parse_localvar (a, newstr, sizeof (newstr), bparg->name, reg, sign, ireg, att);
 			char *ptr = strstr (tstr, oldstr);
 			if (ptr && (!att || *(ptr - 1) == ' ')) {
 				if (delta == 0) {
@@ -547,44 +616,40 @@ static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data
 	}
 
 	char bp[32];
-	if (anal->reg->name[R_REG_NAME_BP]) {
-		strncpy (bp, anal->reg->name[R_REG_NAME_BP], sizeof (bp) - 1);
-		if (isupper ((ut8)*str)) {
+	if (anal->reg->alias[R_REG_ALIAS_BP]) {
+		strncpy (bp, anal->reg->alias[R_REG_ALIAS_BP], sizeof (bp) - 1);
+		if (isupper ((ut8)*tstr)) {
 			r_str_case (bp, true);
 		}
 		bp[sizeof (bp) - 1] = 0;
 	} else {
 		bp[0] = 0;
 	}
-
-	bool ret = true;
-	if (len > strlen (tstr)) {
-		strcpy (str, tstr);
-	} else {
-		// TOO BIG STRING CANNOT REPLACE HERE
-		ret = false;
-	}
-	free (tstr);
-	return ret;
+	return tstr;
 }
 
-static int fini(RParse *p, void *usr) {
+static void fini(RAsmPluginSession *aps) {
+	RParse *p = aps->rasm->parse;
 	R_FREE (p->retleave_asm);
-	return 0;
 }
 
-RParsePlugin r_parse_plugin_x86_pseudo = {
-	.name = "x86.pseudo",
-	.desc = "X86 pseudo syntax",
-	.parse = &parse,
-	.subvar = &subvar,
-	.fini = &fini,
+RAsmPlugin r_asm_plugin_x86 = {
+	.meta = {
+		.name = "x86",
+		.desc = "X86 pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
+	.parse = parse,
+	.subvar = subvar,
+	.patch = patch,
+	.fini = fini,
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_x86_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_x86,
 	.version = R2_VERSION
 };
 #endif

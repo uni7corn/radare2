@@ -159,8 +159,8 @@ R_API int r_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 	// use core binding to set asm.bits correctly based on the addr
 	// this is because of the hassle of arm/thumb
 	// this causes the reg profile to be invalidated
-	if (anal && anal->coreb.archbits) {
-		anal->coreb.archbits (anal->coreb.core, addr);
+	if (anal && anal->coreb.archBits) {
+		anal->coreb.archBits (anal->coreb.core, addr);
 	}
 	const int codealign = anal->config->codealign;
 	if (codealign > 1 && (addr % codealign)) {
@@ -195,17 +195,6 @@ R_API int r_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 		} else {
 			ret = op->size;
 		}
-#if 0
-		// r_arch_op_to_analop (op, &archop);
-		// ret = anal->arch->op (anal, op, addr, data, len, mask);
-		if (ret < 1) {
-			op->type = R_ANAL_OP_TYPE_ILL;
-			op->size = r_anal_archinfo (anal, R_ARCH_INFO_INVOP_SIZE);
-			if (op->size < 0) {
-				op->size = 1;
-			}
-		}
-#endif
 		op->addr = addr;
 		/* consider at least 1 byte to be part of the opcode */
 		if (op->nopcode < 1) {
@@ -230,7 +219,7 @@ R_API int r_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 		ret = -1;
 		op->type = R_ANAL_OP_TYPE_ILL;
 		op->size = 1;
-		op->type = R_ANAL_OP_TYPE_MOV;
+		op->type = R_ANAL_OP_TYPE_MOV; // XXX ?
 		if (op->cycles == 0) {
 			op->cycles = defaultCycles (op);
 		}

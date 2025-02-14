@@ -377,7 +377,7 @@ static ut64 __get_dispatchmessage_offset(RDebug *dbg) {
 	if (!found) {
 		return 0;
 	}
-	char *res = dbg->coreb.cmdstr (dbg->coreb.core, "f~DispatchMessageW");
+	char *res = dbg->coreb.cmdStr (dbg->coreb.core, "f~DispatchMessageW");
 	if (!*res) {
 		free (res);
 		return 0;
@@ -495,7 +495,7 @@ R_API bool r_w32_add_winmsg_breakpoint(RDebug *dbg, const char *input) {
 		cond = r_str_newf ("?= `ae %lu,edx,-`", type);
 	} else {
 		char *reg;
-		if (dbg->bits == R_SYS_BITS_64) {
+		if (R_SYS_BITS_CHECK (dbg->bits, 64)) {
 			reg = "rcx";
 		} else {
 			reg = "ecx";

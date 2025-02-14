@@ -240,7 +240,7 @@ static void setab(RCore *core, const char *arch, int bits) {
 }
 
 static const char *getName(RCore *core, ut64 addr) {
-	RFlagItem *item = r_flag_get_i (core->flags, addr);
+	RFlagItem *item = r_flag_get_in (core->flags, addr);
 	if (item) {
 		if (core->flags->realnames) {
 			return item->realname
@@ -330,30 +330,28 @@ R_API char *r_core_cmd_call_str_at(RCore *core, ut64 addr, const char *cmd) {
 	return retstr;
 }
 
-// R2_600 - return void
-R_API int r_core_bind(RCore *core, RCoreBind *bnd) {
-	R_RETURN_VAL_IF_FAIL (core && bnd, false);
+R_API void r_core_bind(RCore *core, RCoreBind *bnd) {
+	R_RETURN_IF_FAIL (core && bnd);
 	bnd->core = core;
-	bnd->bphit = (RCoreDebugBpHit)r_core_debug_breakpoint_hit;
-	bnd->syshit = (RCoreDebugSyscallHit)r_core_debug_syscall_hit;
+	bnd->bpHit = (RCoreDebugBpHit)r_core_debug_breakpoint_hit;
+	bnd->sysHit = (RCoreDebugSyscallHit)r_core_debug_syscall_hit;
 	bnd->cmd = (RCoreCmd)r_core_cmd0;
 	bnd->cmdf = (RCoreCmdF)r_core_cmdf;
-	bnd->callat = (RCoreCallAt)r_core_cmd_call_str_at;
-	bnd->cmdstr = (RCoreCmdStr)r_core_cmd_str;
-	bnd->cmdstrf = (RCoreCmdStrF)r_core_cmd_strf;
+	bnd->callAt = (RCoreCallAt)r_core_cmd_call_str_at;
+	bnd->cmdStr = (RCoreCmdStr)r_core_cmd_str;
+	bnd->cmdStrF = (RCoreCmdStrF)r_core_cmd_strf;
 	bnd->help = (RCoreBindHelp)core_help;
 	bnd->puts = (RCorePuts)r_cons_print;
-	bnd->setab = (RCoreSetArchBits)setab;
+	bnd->setArchBits = (RCoreSetArchBits)setab;
 	bnd->getName = (RCoreGetName)getName;
 	bnd->getNameDelta = (RCoreGetNameDelta)getNameDelta;
-	bnd->archbits = (RCoreSeekArchBits)archbits;
-	bnd->cfggeti = (RCoreConfigGetI)cfggeti;
+	bnd->archBits = (RCoreSeekArchBits)archbits;
+	bnd->cfgGetI = (RCoreConfigGetI)cfggeti;
 	bnd->cfgGet = (RCoreConfigGet)cfgget;
 	bnd->numGet = (RCoreNumGet)numget;
 	bnd->isMapped = (RCoreIsMapped)__isMapped;
 	bnd->syncDebugMaps = (RCoreDebugMapsSync)__syncDebugMaps;
 	bnd->pjWithEncoding = (RCorePJWithEncoding)r_core_pj_new;
-	return true;
 }
 
 R_API RCore *r_core_ncast(ut64 p) {
@@ -370,7 +368,7 @@ static const char *str_callback(RNum *user, ut64 off, int *ok) {
 		*ok = 0;
 	}
 	if (f) {
-		RFlagItem *item = r_flag_get_i (f, off);
+		RFlagItem *item = r_flag_get_in (f, off);
 		if (item) {
 			if (ok) {
 				*ok = true;
@@ -385,9 +383,7 @@ static const char *str_callback(RNum *user, ut64 off, int *ok) {
 
 R_API RCore *r_core_new(void) {
 	RCore *c = R_NEW0 (RCore);
-	if (c) {
-		r_core_init (c);
-	}
+	r_core_init (c);
 	return c;
 }
 
@@ -494,7 +490,7 @@ static const char *radare_argv[] = {
 	"dts?", "dts", "dts+", "dts-", "dtsf", "dtst", "dtsC", "dtt",
 	"dw",
 	"dx?", "dx", "dxa", "dxe", "dxr", "dxs",
-	"e?", "e", "-e", "-i", "e-", "e*", "e!", "ec", "ee?", "ee", "?ed", "ed", "ej", "env", "er", "es", "et", "ev", "evj",
+	"e?", "e", "e+", "-e", "-i", "e-", "e*", "e!", "ec", "ee?", "ee", "?ed", "ed", "ej", "env", "er", "es", "et", "ev", "evj",
 	"ec?", "ec", "ec*", "ecd", "ecr", "ecs", "ecj", "ecc", "eco", "ecp", "ecn",
 	"ecH?", "ecH", "ecHi", "ecHw", "ecH-",
 	"f?", "f", "f.", "f*", "f-", "f--", "f+", "f=", "fa", "fb", "fc?", "fc", "fC", "fd", "fe-", "fe",
@@ -1673,13 +1669,13 @@ R_API int r_core_fgets(char *buf, int len) {
 
 static const char *r_core_print_offname(void *p, ut64 addr) {
 	RCore *c = (RCore*)p;
-	RFlagItem *item = r_flag_get_i (c->flags, addr);
+	RFlagItem *item = r_flag_get_in (c->flags, addr);
 	return item ? item->name : NULL;
 }
 
 static int r_core_print_offsize(void *p, ut64 addr) {
 	RCore *c = (RCore*)p;
-	RFlagItem *item = r_flag_get_i (c->flags, addr);
+	RFlagItem *item = r_flag_get_in (c->flags, addr);
 	return item ? item->size: -1;
 }
 
@@ -1772,7 +1768,7 @@ R_API char *r_core_anal_hasrefs(RCore *core, ut64 value, int mode) {
 		}
 		return res;
 	}
-	RFlagItem *fi = r_flag_get_i (core->flags, value);
+	RFlagItem *fi = r_flag_get_in (core->flags, value);
 	return fi? strdup (fi->name): NULL;
 }
 
@@ -1972,7 +1968,7 @@ R_API char *r_core_anal_hasrefs_to_depth(RCore *core, ut64 value, PJ *pj, int de
 				r_io_read_at (core->io, value, buf, sizeof (buf));
 				r_asm_set_pc (core->rasm, value);
 				r_asm_disassemble (core->rasm, &op, buf, sizeof (buf));
-				r_strbuf_appendf (s, "'%s' ", r_asm_op_get_asm (&op));
+				r_strbuf_appendf (s, "'%s' ", op.mnemonic);
 				r_asm_op_fini (&op);
 				/* get library name */
 				{ // NOTE: dup for mapname?
@@ -2209,10 +2205,10 @@ static void __init_autocomplete_default(RCore* core) {
 	const char *flags[] = {
 		"*", "s", "s+", "b", "f", "fg", "?", "?v", "ad", "bf", "c1", "db", "dbw",
 		"f-", "fr", "tf", "/a", "/v", "/r", "/re", "aav", "aep", "aef", "afb", "o=",
-		"afc", "axg", "axt", "axf", "dcu", "ag", "agfl", "aecu", "aesu", "aeim", NULL
+		"afc", "axg", "axt", "axf", "dcu", "ag", "agfl", "aecu", "aesu", "aeim", "abp", NULL
 	};
 	const char *evals[] = {
-		"-e", "e", "ee", "et", "e?", "e!", "ev", "evj", NULL
+		"-e", "e", "e+", "ee", "et", "e?", "e!", "ev", "evj", NULL
 	};
 	const char *breaks[] = {
 		"db-", "dbc", "dbC", "dbd", "dbe", "dbs", "dbi", "dbte", "dbtd", "dbts", NULL
@@ -2382,8 +2378,8 @@ R_API void r_core_autocomplete_reload(RCore *core) {
 	__init_autocomplete (core);
 }
 
-R_API RFlagItem *r_core_flag_get_by_spaces(RFlag *f, ut64 off) {
-	return r_flag_get_by_spaces (f, off,
+R_API RFlagItem *r_core_flag_get_by_spaces(RFlag *f, bool prionospace, ut64 off) {
+	return r_flag_get_by_spaces (f, prionospace, off,
 		R_FLAGS_FS_FUNCTIONS,
 		R_FLAGS_FS_SIGNS,
 		R_FLAGS_FS_CLASSES,
@@ -2393,8 +2389,10 @@ R_API RFlagItem *r_core_flag_get_by_spaces(RFlag *f, ut64 off) {
 		R_FLAGS_FS_STRINGS,
 		R_FLAGS_FS_RESOURCES,
 		R_FLAGS_FS_SYMBOLS_SECTIONS,
+#if 1
 		R_FLAGS_FS_SECTIONS,
 		R_FLAGS_FS_SEGMENTS,
+#endif
 		NULL);
 }
 
@@ -2609,7 +2607,6 @@ R_API bool r_core_init(RCore *core) {
 	core->crypto = r_crypto_new ();
 	core->egg = r_egg_new ();
 // 	core->egg->rasm = core->rasm;
-	// r_anal_bind (core->anal, &(core->egg->rasm->analb));
 
 	core->undos = r_list_newf ((RListFree)r_core_undo_free);
 
@@ -2651,6 +2648,7 @@ R_API bool r_core_init(RCore *core) {
 	core->rasm->num = core->num;
 	core->anal = r_anal_new ();
 	r_anal_bind (core->anal, &core->egg->rasm->analb);
+	r_anal_bind (core->anal, &(core->rasm->analb));
 	r_asm_set_user_ptr (core->rasm, core);
 	// XXX this should be tied to RArchConfig
 	r_egg_setup (core->egg, R_SYS_ARCH, R_SYS_BITS, 0, R_SYS_OS);
@@ -2665,12 +2663,10 @@ R_API bool r_core_init(RCore *core) {
 	core->anal->config = core->rasm->config;
 
 	r_ref (core->rasm->config);
-	r_unref (core->anal->reg->config);
-	core->anal->reg->config = core->rasm->config;
+	core->anal->reg->endian = core->rasm->config->endian;
 #else
 	r_ref_set (core->print->config, core->rasm->config);
 	r_ref_set (core->anal->config, core->rasm->config);
-	r_ref_set (core->anal->reg->config, core->rasm->config);
 #endif
 	// RAnal.new() doesnt initializes this field. but it should be refcounted
 	core->anal->print = core->print;
@@ -2683,16 +2679,11 @@ R_API bool r_core_init(RCore *core) {
 	core->anal->cb.on_fcn_new = on_fcn_new;
 	core->anal->cb.on_fcn_delete = on_fcn_delete;
 	core->anal->cb.on_fcn_rename = on_fcn_rename;
-	r_anal_bind (core->anal, &core->rasm->analb);
 	core->print->sdb_types = core->anal->sdb_types;
 	core->rasm->syscall = r_syscall_ref (core->anal->syscall); // BIND syscall anal/asm
 	r_anal_set_user_ptr (core->anal, core);
 	core->anal->cb_printf = (void *) r_cons_printf;
-	core->parser = r_parse_new ();
-	r_anal_bind (core->anal, &(core->parser->analb));
-	core->parser->varlist = r_anal_function_get_var_fields;
-	/// XXX shouhld be using coreb
-	r_parse_set_user_ptr (core->parser, core);
+	core->rasm->parse->varlist = r_anal_function_get_var_fields;
 	core->bin = r_bin_new ();
 	r_cons_bind (&core->bin->consb);
 	// XXX we should use RConsBind instead of this hardcoded pointer
@@ -2732,9 +2723,8 @@ R_API bool r_core_init(RCore *core) {
 	core->anal->flg_class_set = core_flg_class_set;
 	core->anal->flg_class_get = core_flg_class_get;
 	core->anal->flg_fcn_set = core_flg_fcn_set;
-	r_anal_bind (core->anal, &(core->parser->analb));
-	core->parser->flag_get = r_core_flag_get_by_spaces;
-	core->parser->label_get = r_anal_function_get_label_at;
+	core->rasm->parse->flag_get = r_core_flag_get_by_spaces;
+	core->rasm->parse->label_get = r_anal_function_get_label_at;
 
 	r_core_bind (core, &(core->anal->coreb));
 
@@ -2767,9 +2757,9 @@ R_API bool r_core_init(RCore *core) {
 	r_asm_use (core->rasm, R_SYS_ARCH);
 	r_anal_use (core->anal, R_SYS_ARCH);
 #endif
-	if (R_SYS_BITS & R_SYS_BITS_64) {
+	if (R_SYS_BITS_CHECK (R_SYS_BITS, 64)) {
 		r_config_set_i (core->config, "asm.bits", 64);
-	} else if (R_SYS_BITS & R_SYS_BITS_32) {
+	} else if (R_SYS_BITS_CHECK (R_SYS_BITS, 32)) {
 		r_config_set_i (core->config, "asm.bits", 32);
 	}
 	r_config_set (core->config, "asm.arch", R_SYS_ARCH);
@@ -2857,16 +2847,15 @@ R_API void r_core_fini(RCore *c) {
 	r_list_free (c->watchers);
 	r_list_free (c->scriptstack);
 	r_core_task_scheduler_fini (&c->tasks);
+	r_lib_free (c->lib);
 	c->rcmd = r_cmd_free (c->rcmd);
 	r_list_free (c->cmd_descriptors);
 	/*
-	r_unref (c->anal->reg->config);
 	r_unref (c->anal->config);
 	*/
 	if (c->anal->esil) {
 		c->anal->esil->anal = NULL;
 	}
-	r_lib_free (c->lib);
 	r_anal_free (c->anal);
 	r_asm_free (c->rasm);
 	c->rasm = NULL;
@@ -2895,7 +2884,6 @@ R_API void r_core_fini(RCore *c) {
 	free (c->asmqjmps);
 	sdb_free (c->sdb);
 	r_core_log_free (c->log);
-	r_parse_free (c->parser);
 	r_fs_shell_free (c->rfs);
 	free (c->times);
 }
@@ -3034,11 +3022,9 @@ static void set_prompt(RCore *r) {
 			prompt_sec (r, sec, sizeof (sec));
 		}
 		if (!promptset) {
-			if (r->print->wide_offsets && r->dbg->bits & R_SYS_BITS_64) {
-				snprintf (p, sizeof (p), "0x%016" PFMT64x, r->offset);
-			} else {
-				snprintf (p, sizeof (p), "0x%08" PFMT64x, r->offset);
-			}
+			const char *fmt = (r->print->wide_offsets && R_SYS_BITS_CHECK (r->dbg->bits, 64))
+				? "0x%016" PFMT64x : "0x%08" PFMT64x;
+			snprintf (p, sizeof (p), fmt, r->offset);
 		}
 		snprintf (tmp, sizeof (tmp), "%s%s", sec, p);
 	}
@@ -3811,11 +3797,35 @@ R_API bool r_core_autocomplete_remove(RCoreAutocomplete *parent, const char* cmd
 	return false;
 }
 
-R_API RTable *r_core_table(RCore *core, const char *name) {
-	RTable *table = r_table_new (R_STR_ISEMPTY (name)? "table": name);
-	if (table) {
-		table->cons = core->cons;
+/* Config helper function for RTable */
+R_API RTable *r_core_table_new(RCore *core, const char *title) {
+	int maxcol = r_config_get_i (core->config, "cfg.table.maxcol");
+	bool wrap = r_config_get_b (core->config, "cfg.table.wrap");
+	const char *format = r_config_get (core->config, "cfg.table.format");
+	RTable *table = r_table_new (title);
+	table->cons = core->cons;
+	// ut16 mode = SHOW_FANCY | SHOW_HEADER;
+	ut16 mode = SHOW_HEADER;
+	if (!strcmp (format, "fancy")) {
+		mode = SHOW_FANCY | SHOW_HEADER;
+	} else if (!strcmp (format, "simple")) {
+		mode = 0;
+	} else if (r_str_startswith (format, "ascii")) {
+		mode = SHOW_FANCY | SHOW_HEADER;
+	} else if (!strcmp (format, "csv")) {
+		mode = SHOW_CSV;
+	} else if (!strcmp (format, "tsv")) {
+		mode = SHOW_TSV;
+	} else if (!strcmp (format, "r2")) {
+		mode = SHOW_R2;
+	} else if (!strcmp (format, "json")) {
+		mode = SHOW_JSON;
+	} else if (!strcmp (format, "sql")) {
+		mode = SHOW_SQL;
 	}
+	table->showMode = mode;
+	table->maxColumnWidth = maxcol;
+	table->wrapColumns = wrap;
 	return table;
 }
 

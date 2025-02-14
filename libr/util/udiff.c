@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2022 - pancake, nikolai */
+/* radare - LGPL - Copyright 2009-2025 - pancake, nikolai */
 
 #include <r_util/r_diff.h>
 
@@ -76,8 +76,7 @@ static inline ut32 lev_get_val(Levrow *row, ut32 i) {
 	return UT32_MAX - 1; // -1 so a +1 with sub weight does not overflow
 }
 
-// obtains array of operations, in reverse order, to get from column to row of
-// matrix
+// obtains array of operations, in reverse order, to get from column to row of matrix
 static st32 lev_parse_matrix(Levrow *matrix, ut32 len, bool invert, RLevOp **chgs) {
 	R_RETURN_VAL_IF_FAIL (len >= 2 && matrix && chgs && !*chgs, -1);
 	Levrow *row = matrix + len - 1;
@@ -92,7 +91,7 @@ static st32 lev_parse_matrix(Levrow *matrix, ut32 len, bool invert, RLevOp **chg
 	const size_t overflow = (size_t)-1 / (2 * sizeof (RLevOp));
 	int j = row->end;
 	size_t size = j;
-	RLevOp *changes = R_NEWS (RLevOp, size);
+	RLevOp *changes = R_NEWS (RLevOp, size + 1);
 	if (!changes) {
 		return -1;
 	}
@@ -105,15 +104,12 @@ static st32 lev_parse_matrix(Levrow *matrix, ut32 len, bool invert, RLevOp **chg
 
 		if (insert >= size) {
 			if (size >= overflow) {
-				// overflow paranoia
-				free (changes);
-				return -1;
+				goto leave;
 			}
 			size *= 2;
-			RLevOp *tmp = realloc (changes, size * sizeof (RLevOp));
+			RLevOp *tmp = realloc (changes, (1 + size) * sizeof (RLevOp));
 			if (!tmp) {
-				free (changes);
-				return -1;
+				goto leave;
 			}
 			changes = tmp;
 		}
@@ -132,21 +128,17 @@ static st32 lev_parse_matrix(Levrow *matrix, ut32 len, bool invert, RLevOp **chg
 			j--;
 			continue; // continue with same rows
 		}
-		free (row->changes);
-		row->changes = NULL;
+		R_FREE (row->changes);
 		row = prev_row--;
 	}
 	if (size - insert < j) {
 		if (size > overflow) {
-			// overly paranoid
-			free (changes);
-			return -1;
+			goto leave;
 		}
 		size += j - (size - insert);
-		RLevOp *tmp = realloc (changes, size * sizeof (RLevOp));
+		RLevOp *tmp = realloc (changes, (1 + size) * sizeof (RLevOp));
 		if (!tmp) {
-			free (changes);
-			return -1;
+			goto leave;
 		}
 		changes = tmp;
 	}
@@ -157,6 +149,9 @@ static st32 lev_parse_matrix(Levrow *matrix, ut32 len, bool invert, RLevOp **chg
 
 	*chgs = changes;
 	return insert;
+leave:
+	free (changes);
+	return -1;
 }
 
 static inline void lev_fill_changes(RLevOp *chgs, RLevOp op, ut32 count) {

@@ -303,6 +303,7 @@ typedef struct r_bin_section_t {
 	ut64 vaddr;
 	ut64 paddr;
 	ut32 perm;
+	ut32 flags;
 	const char *type;
 	const char *arch;
 	char *format;
@@ -377,6 +378,19 @@ typedef struct r_bin_object_t {
 	bool is_reloc_patched; // used to indicate whether relocations were patched or not
 } RBinObject;
 
+typedef struct r_bin_file_options_t {
+	const char *pluginname;
+	ut64 baseaddr; // where the linker maps the binary in memory
+	ut64 loadaddr; // starting physical address to read from the target file
+	// ut64 paddr; // offset
+	ut64 sz;
+	int xtr_idx; // load Nth binary
+	int fd;
+	int rawstr;
+	bool nofuncstarts;
+	const char *filename;
+} RBinFileOptions;
+
 // XXX: RbinFile may hold more than one RBinObject?
 /// XX curplugin == o->plugin
 typedef struct r_bin_file_t {
@@ -400,25 +414,14 @@ typedef struct r_bin_file_t {
 	// struct r_bin_plugin_t *curplugin; // use o->plugin
 	RList *xtr_data;
 	Sdb *sdb;
-// #warning RBinFile.sdb_info will be removed in r2-5.7.0
 	Sdb *sdb_info;
 	Sdb *sdb_addrinfo;
 	void *addrinfo_priv; // future use to store abi-safe addrline info instead of k/v
 	struct r_bin_t *rbin;
 	int string_count;
+	// R2_600 - add RBinFileOptions here
+	RBinFileOptions *options;
 } RBinFile;
-
-typedef struct r_bin_file_options_t {
-	const char *pluginname;
-	ut64 baseaddr; // where the linker maps the binary in memory
-	ut64 loadaddr; // starting physical address to read from the target file
-	// ut64 paddr; // offset
-	ut64 sz;
-	int xtr_idx; // load Nth binary
-	int rawstr;
-	int fd;
-	const char *filename;
-} RBinFileOptions;
 
 typedef struct r_bin_create_options_t {
 	const char *pluginname;
@@ -431,6 +434,10 @@ typedef struct r_bin_create_options_t {
 	const char *arch;
 	int bits;
 } RBinCreateOptions;
+
+typedef struct r_bin_options_t {
+	bool fake_aslr;
+} RBinOptions;
 
 struct r_bin_t {
 	const char *file;
@@ -462,9 +469,7 @@ struct r_bin_t {
 	char strfilter; // string filtering
 	char *strpurge; // purge false positive strings
 	char *srcdir; // dir.source
-#if R2_USE_NEW_ABI
 	char *srcdir_base; // dir.source.base
-#endif
 	char *prefix; // bin.prefix
 	char *strenc;
 	ut64 filter_rules;
@@ -474,6 +479,7 @@ struct r_bin_t {
 	bool use_xtr; // use extract plugins when loading a file?
 	bool use_ldr; // use loader plugins when loading a file?
 	RStrConstPool constpool;
+	RBinOptions options; // R2_600 - move all the options from rbin into this struct
 };
 
 typedef struct r_bin_xtr_metadata_t {
@@ -512,6 +518,7 @@ typedef struct r_bin_xtr_plugin_t {
 	RBinXtrData *(*extract)(RBin *bin, int idx);
 	RList *(*extractall)(RBin *bin);
 	bool loadbuf;
+	bool weak_guess;
 
 	bool (*load)(RBin *bin);
 	int (*size)(RBin *bin);
@@ -585,13 +592,12 @@ typedef struct r_bin_plugin_t {
 	RBuffer* (*create)(RBin *bin, const ut8 *code, int codelen, const ut8 *data, int datalen, RBinArchOptions *opt);
 	char* (*demangle)(const char *str);
 	char* (*regstate)(RBinFile *bf);
-#if R2_USE_NEW_ABI
 	bool (*cmd)(RBinFile *bf, const char *command);
 	// TODO: R2_600 RBuffer* (*create)(RBin *bin, RBinCreateOptions *opt);
-#endif
 	/* default value if not specified by user */
 	int minstrlen;
 	char strfilter;
+	bool weak_guess;
 	void *user;
 } RBinPlugin;
 
@@ -604,14 +610,9 @@ typedef struct r_bin_class_t {
 	int index; // should be unsigned?
 	ut64 addr;
 	char *ns; // namespace // maybe RBinName?
-#if R2_USE_NEW_ABI
-	// Use RVec here
+	// R2_600 - Use RVec here
 	RList *methods; // <RBinSymbol>
 	RList *fields; // <RBinField>
-#else
-	RList *methods; // <RBinSymbol>
-	RList *fields; // <RBinField>
-#endif
 	// RList *interfaces; // <char *>
 	RBinAttribute attr;
 	ut64 lang;
@@ -737,13 +738,11 @@ typedef struct r_bin_bind_t {
 	ut32 visibility;
 } RBinBind;
 
-R_IPI RBinSection *r_bin_section_new(const char *name);
 R_API RBinSection *r_bin_section_clone(RBinSection *s);
-R_IPI void r_bin_section_free(RBinSection *bs);
 R_API void r_bin_info_free(RBinInfo *rb);
 R_API void r_bin_import_free(RBinImport *imp);
 R_API void r_bin_symbol_free(void *sym);
-R_API const char *r_bin_symbol_unsafe(RBin *bin, const char *name);
+R_API const char *r_bin_import_tags(RBin *bin, const char *name);
 R_API RBinSymbol *r_bin_symbol_new(const char *name, ut64 paddr, ut64 vaddr);
 R_API RBinSymbol *r_bin_symbol_clone(RBinSymbol *bs);
 R_API void r_bin_symbol_copy(RBinSymbol *dst, RBinSymbol *src);
@@ -766,9 +765,7 @@ R_API bool r_bin_open(RBin *bin, const char *file, RBinFileOptions *opt);
 R_API bool r_bin_open_io(RBin *bin, RBinFileOptions *opt);
 R_API bool r_bin_open_buf(RBin *bin, RBuffer *buf, RBinFileOptions *opt);
 R_API bool r_bin_reload(RBin *bin, ut32 bf_id, ut64 baseaddr);
-#if R2_USE_NEW_ABI
 R_API bool r_bin_command(RBin *bin, const char *input);
-#endif
 
 R_API RBinClass *r_bin_class_new(const char *name, const char *super, ut64 attr);
 R_API void r_bin_class_free(RBinClass *);
@@ -824,7 +821,7 @@ R_API RBinObject *r_bin_cur_object(RBin *bin);
 R_API bool r_bin_select(RBin *bin, const char *arch, int bits, const char *name);
 R_API bool r_bin_select_bfid(RBin *bin, ut32 bf_id);
 R_API bool r_bin_use_arch(RBin *bin, const char *arch, int bits, const char *name);
-R_API void r_bin_list_archs(RBin *bin, PJ *pj, int mode);
+R_API void r_bin_list_archs(RBin *bin, PJ *pj, RTable *t, int mode);
 R_API RBuffer *r_bin_create(RBin *bin, const char *plugin_name, const ut8 *code, int codelen, const ut8 *data, int datalen, RBinArchOptions *opt);
 R_API RBuffer *r_bin_package(RBin *bin, const char *type, const char *file, RList *files);
 
@@ -891,9 +888,12 @@ R_API const char *r_bin_get_meth_flag_string(ut64 flag, bool compact);
 R_API RBinSection *r_bin_get_section_at(RBinObject *o, ut64 off, int va);
 
 /* dbginfo.c */
+// R2_600 - refactor and optimize storage
+R_API RBinDbgItem *r_bin_dbgitem_at(RBin *bin, ut64 addr);
 R_API bool r_bin_addr2line(RBin *bin, ut64 addr, char *file, int len, int *line, int *column);
 R_API char *r_bin_addr2text(RBin *bin, ut64 addr, int origin);
 R_API char *r_bin_addr2fileline(RBin *bin, ut64 addr);
+
 /* bin_write.c */
 R_API bool r_bin_wr_addlib(RBin *bin, const char *lib);
 R_API ut64 r_bin_wr_scn_resize(RBin *bin, const char *name, ut64 size);
@@ -917,11 +917,7 @@ R_API void r_bin_name_filtered(RBinName *bn, const char *fname);
 R_API void r_bin_name_free(RBinName *bn);
 
 R_API char *r_bin_attr_tostring(ut64 attr, bool singlechar);
-#if R2_USE_NEW_ABI
 R_API ut64 r_bin_attr_fromstring(const char *s, bool compact);
-#else
-R_API ut64 r_bin_attr_fromstring(const char *s);
-#endif
 
 /* filter.c */
 typedef struct HtSU_t HtSU;
@@ -930,9 +926,13 @@ R_API void r_bin_load_filter(RBin *bin, ut64 rules);
 R_API void r_bin_filter_symbols(RBinFile *bf, RList *list);
 R_API void r_bin_filter_sections(RBinFile *bf, RList *list);
 R_API char *r_bin_filter_name(RBinFile *bf, HtSU *db, ut64 addr, const char *name);
-R_API void r_bin_filter_sym(RBinFile *bf, HtPP *ht, ut64 vaddr, RBinSymbol *sym);
 R_API bool r_bin_strpurge(RBin *bin, const char *str, ut64 addr);
 R_API bool r_bin_string_filter(RBin *bin, const char *str, ut64 addr);
+
+// internal apis
+R_IPI bool r_bin_filter_sym(RBinFile *bf, HtPP *ht, ut64 vaddr, RBinSymbol *sym);
+R_IPI RBinSection *r_bin_section_new(const char *name);
+R_IPI void r_bin_section_free(RBinSection *bs);
 
 /* plugin pointers */
 extern RBinPlugin r_bin_plugin_any;

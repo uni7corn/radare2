@@ -1,47 +1,32 @@
-/* radare2 - LGPL - Copyright 2009-2023 - pancake */
+/* radare2 - LGPL - Copyright 2009-2024 - pancake */
 
 #include "r_core.h"
 #include "config.h"
 
-#define CB(x, y)\
-	static int __lib_ ## x ## _cb (RLibPlugin * pl, void *user, void *data) {\
-		struct r_ ## x ## _plugin_t *hand = (struct r_ ## x ## _plugin_t *)data;\
-		RCore *core = (RCore *) user;\
-		pl->free = NULL; \
-		r_ ## x ## _plugin_add (core->y, hand);\
-		return true;\
-	}\
-	static int __lib_ ## x ## _dt (RLibPlugin * pl, void *user, void *data) { \
+#define CB(x, y) \
+	static int __lib_ ## x ## _cb (RLibPlugin *pl, void *user, void *data) { \
 		struct r_ ## x ## _plugin_t *hand = (struct r_ ## x ## _plugin_t *)data; \
-		RCore *core = (RCore *) user; \
-		return r_ ## x ## _plugin_remove (core->y, hand); \
-	}
-
-// TODO: deprecate this
-#define CB_COPY(x, y)\
-	static int __lib_ ## x ## _cb (RLibPlugin * pl, void *user, void *data) {\
-		struct r_ ## x ## _plugin_t *hand = (struct r_ ## x ## _plugin_t *)data;\
-		struct r_ ## x ## _plugin_t *instance;\
-		RCore *core = (RCore *) user;\
-		instance = R_NEW (struct r_ ## x ## _plugin_t);\
-		memcpy (instance, hand, sizeof (struct r_ ## x ## _plugin_t));\
-		r_ ## x ## _plugin_add (core->y, instance);\
-		return true;\
-	}\
+		RCore *core = (RCore *)user; \
+		pl->free = NULL; \
+		pl->name = strdup (hand->meta.name); \
+		r_ ## x ## _plugin_add (core->y, hand); \
+		return true; \
+	} \
 	static int __lib_ ## x ## _dt (RLibPlugin *pl, void *user, void *data) { \
 		struct r_ ## x ## _plugin_t *hand = (struct r_ ## x ## _plugin_t *)data; \
-		RCore *core = (RCore *) user; \
+		RCore *core = (RCore *)user; \
+		free (pl->name); \
 		return r_ ## x ## _plugin_remove (core->y, hand); \
 	}
 
-CB_COPY (io, io)
+CB (io, io)
 CB (core, rcmd)
 CB (debug, dbg)
 CB (bp, dbg->bp)
 CB (lang, lang)
 CB (anal, anal)
 CB (esil, anal->esil)
-CB (parse, parser)
+CB (asm, rasm)
 CB (bin, bin)
 CB (egg, egg)
 CB (fs, fs)
@@ -105,8 +90,8 @@ R_API void r_core_loadlibs_init(RCore *core) {
 	DF (LANG, "language plugins", lang);
 	DF (ANAL, "analysis plugins", anal);
 	DF (ESIL, "esil emulation plugins", esil);
-	// DF (ASM, "(dis)assembler plugins", asm);
-	DF (PARSE, "parsing plugins", parse);
+	DF (ASM, "assembly plugins", asm);
+	// DF (PARSE, "parsing plugins", parse);
 	DF (BIN, "bin plugins", bin);
 	DF (EGG, "egg plugins", egg);
 	DF (FS, "fs plugins", fs);

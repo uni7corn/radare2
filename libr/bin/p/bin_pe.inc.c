@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2023 - nibble, pancake, alvarofe */
+/* radare - LGPL - Copyright 2009-2025 - nibble, pancake, alvarofe */
 
 #include <r_bin.h>
 #include "../i/private.h"
@@ -154,6 +154,7 @@ static RList* sections(RBinFile *bf) {
 		sec->vaddr = sections[i].vaddr + ba;
 		sec->add = true;
 		sec->perm = 0;
+		sec->flags = sections[i].flags;
 		if (R_BIN_PE_SCN_IS_EXECUTABLE (sections[i].perm)) {
 			sec->perm |= R_PERM_X;
 			sec->perm |= R_PERM_R; // implicit
@@ -196,7 +197,7 @@ static RList* symbols(RBinFile *bf) {
 	struct r_bin_pe_import_t *imports = NULL;
 	int i;
 
-	if (!(ret = r_list_newf (free))) {
+	if (!(ret = r_list_newf (r_bin_symbol_free))) {
 		return NULL;
 	}
 	RBinPEObj *pe = PE_(get) (bf);
@@ -321,7 +322,10 @@ static RList* imports(RBinFile *bf) {
 
 static RList* relocs(RBinFile *bf) {
 	RBinPEObj *pe = PE_(get) (bf);
-	return pe? pe->relocs: NULL;
+	if (pe && pe->relocs) {
+		return r_list_clone (pe->relocs, NULL);
+	}
+	return NULL;
 }
 
 static RList* libs(RBinFile *bf) {

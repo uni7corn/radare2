@@ -73,6 +73,8 @@ static void label_addrs_kv_free(HtPPKv *kv) {
 }
 
 R_API RAnalFunction *r_anal_function_new(RAnal *anal) {
+	// XXX fcn->name is null because its r_anal_create_function the one that must be called
+	R_RETURN_VAL_IF_FAIL (anal, NULL);
 	RAnalFunction *fcn = R_NEW0 (RAnalFunction);
 	if (!fcn) {
 		return NULL;
@@ -316,11 +318,13 @@ R_API ut64 r_anal_function_min_addr(RAnalFunction *fcn) {
 }
 
 R_API ut64 r_anal_function_max_addr(RAnalFunction *fcn) {
+	R_RETURN_VAL_IF_FAIL (fcn, 0);
 	ensure_fcn_range (fcn);
 	return fcn->meta._max;
 }
 
 R_API ut64 r_anal_function_size_from_entry(RAnalFunction *fcn) {
+	R_RETURN_VAL_IF_FAIL (fcn, 0);
 	ensure_fcn_range (fcn);
 	return fcn->meta._min == UT64_MAX ? 0 : fcn->meta._max - fcn->addr;
 }
@@ -369,7 +373,11 @@ R_API bool r_anal_function_was_modified(RAnalFunction *fcn) {
 }
 
 R_API int r_anal_function_coverage(RAnalFunction *fcn) {
+	R_RETURN_VAL_IF_FAIL (fcn, 0);
 	int total = r_list_length (fcn->bbs);
+	if (total == 0) {
+		return 0;
+	}
 	RListIter *iter;
 	RAnalBlock *bb;
 	int traced = 0;

@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2024 - pancake */
+/* radare - LGPL - Copyright 2009-2025 - pancake */
 
 #include <r_core.h>
 #include <r_vec.h>
@@ -292,6 +292,7 @@ static RCoreHelpMessage help_msg_visual = {
 	"$", "set the program counter to the current offset + cursor",
 	"&", "rotate asm.bits between 8, 16, 32 and 64 applying hints",
 	"%", "in cursor mode finds matching pair, otherwise toggle autoblocksz",
+	"0", "reset print mode (V0pp)",
 	"^", "seek to the beginning of the function",
 	"!", "swap into visual panels mode",
 	"TAB", "switch to the next print mode (or element in cursor mode)",
@@ -1161,12 +1162,14 @@ static void setprintmode(RCore *core, int n) {
 
 	if (n > 0) {
 		v->printidx = R_ABS ((v->printidx + 1) % NPF);
-	} else {
+	} else if (n < 0) {
 		if (v->printidx) {
 			v->printidx--;
 		} else {
 			v->printidx = NPF - 1;
 		}
+	} else {
+		v->printidx = 0;
 	}
 	switch (v->printidx) {
 	case R_CORE_VISUAL_MODE_PD:
@@ -1461,7 +1464,7 @@ repeat:
 	r_cons_clear00 ();
 	r_cons_gotoxy (1, 1);
 	{
-		char *address = (core->dbg->bits & R_SYS_BITS_64)
+		char *address = R_SYS_BITS_CHECK (core->dbg->bits, 64)
 			? r_str_newf ("0x%016"PFMT64x, addr)
 			: r_str_newf ("0x%08"PFMT64x, addr);
 		r_cons_printf ("[%s%srefs]> %s # (TAB/jk/q/?) ",
@@ -1972,6 +1975,7 @@ static void visual_comma(RCore *core) {
 			if (R_STR_ISEMPTY (comment)) {
 				comment = r_str_newf (",(%s)", fn);
 				r_meta_set_string (core->anal, R_META_TYPE_COMMENT, addr, comment);
+				R_FREE (comment);
 			} else {
 				// append filename in current comment
 				char *nc = r_str_newf ("%s ,(%s)", comment, fn);
@@ -2763,7 +2767,7 @@ static bool toggle_bb(RCore *core, ut64 addr) {
 		if (bb) {
 			bb->folded = !bb->folded;
 		} else {
-			r_warn_if_reached ();
+			R_WARN_IF_REACHED ();
 		}
 		return true;
 	} else {
@@ -3368,15 +3372,15 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 			r_core_visual_config (core);
 			break;
 		case '^':
-			  {
-				  RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset, 0);
-				  if (fcn) {
-					  r_core_seek (core, fcn->addr, false);
-				  } else {
-					  __core_visual_gogo (core, 'g');
-				  }
-			  }
-			  break;
+			{
+				RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset, 0);
+				if (fcn) {
+					r_core_seek (core, fcn->addr, false);
+				} else {
+					__core_visual_gogo (core, 'g');
+				}
+			}
+			break;
 		case 'E':
 			r_core_visual_colors (core);
 			break;
@@ -3778,13 +3782,11 @@ R_API int r_core_visual_cmd(RCore *core, const char *arg) {
 			}
 			break;
 		case '0':
-		{
-			RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset, R_ANAL_FCN_TYPE_NULL);
-			if (fcn) {
-				r_core_seek (core, fcn->addr, true);
-			}
-		}
-		break;
+			core->visual.current0format = 0;
+			core->visual.current0format = 0;
+			core->visual.currentFormat = core->visual.current0format;
+			setprintmode (core, 0);
+			break;
 		case '-':
 			if (core->print->cur_enabled) {
 				if (core->seltab < 2 && v->printidx == R_CORE_VISUAL_MODE_DB) {
@@ -4229,7 +4231,7 @@ static void visual_title(RCore *core, int color) {
 	}
 	{
 		char *title;
-		char *address = (core->print->wide_offsets && core->dbg->bits & R_SYS_BITS_64)
+		char *address = (core->print->wide_offsets && R_SYS_BITS_CHECK (core->dbg->bits, 64))
 			? r_str_newf ("0x%016"PFMT64x, core->offset)
 			: r_str_newf ("0x%08"PFMT64x, core->offset);
 		if (core->visual.ime) {
@@ -4624,8 +4626,11 @@ static void visual_refresh_oneshot(RCore *core) {
 	r_core_task_enqueue_oneshot (&core->tasks, (RCoreTaskOneShot) visual_refresh, core);
 }
 
-#if R2_USE_NEW_ABI
 static int varcount(RCore *core, RAnalFunction *f) {
+	int mode = r_config_get_i (core->config, "asm.var.summary");
+	if (mode != 0) {
+		return 0;
+	}
 	RAnalFcnVarsCache vars_cache;
 	if (!f) {
 		f = r_anal_get_function_at (core->anal, core->offset);
@@ -4637,9 +4642,9 @@ static int varcount(RCore *core, RAnalFunction *f) {
 	int len = r_list_length (vars_cache.rvars);
 	len += r_list_length (vars_cache.bvars);
 	len += r_list_length (vars_cache.svars);
+	r_anal_function_vars_cache_fini (&vars_cache);
 	return len;
 }
-#endif
 
 R_API void r_core_visual_disasm_up(RCore *core, int *cols) {
 	RAnalFunction *f = r_anal_get_fcn_in (core->anal, core->offset, R_ANAL_FCN_TYPE_NULL);
@@ -4649,7 +4654,6 @@ R_API void r_core_visual_disasm_up(RCore *core, int *cols) {
 			*cols = 4;
 		}
 	} else {
-#if R2_USE_NEW_ABI
 		if (f && core->offset == f->addr) {
 			if (core->skiplines > 0) {
 				core->skiplines--;
@@ -4674,9 +4678,6 @@ R_API void r_core_visual_disasm_up(RCore *core, int *cols) {
 			*cols = delta;
 			// *cols = 0;
 		}
-#else
-		*cols = r_core_visual_prevopsz (core, core->offset);
-#endif
 	}
 }
 
@@ -4729,7 +4730,6 @@ R_API void r_core_visual_disasm_down(RCore *core, RAnalOp *op, int *cols) {
 			}
 		}
 	}
-#if R2_USE_NEW_ABI
 	int nvars = varcount (core, f);
 	if (f && f->addr == orig && nvars < 20) {
 		// skip line by line here
@@ -4743,11 +4743,6 @@ R_API void r_core_visual_disasm_down(RCore *core, RAnalOp *op, int *cols) {
 	} else if (*cols < 1) {
 		*cols = op->size > 1 ? op->size : 1;
 	}
-#else
-	if (*cols < 1) {
-		*cols = op->size > 1 ? op->size : 1;
-	}
-#endif
 }
 
 #ifdef R2__WINDOWS__

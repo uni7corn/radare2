@@ -179,7 +179,7 @@ static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
 	RBuffer *fbuf = r_buf_ref (buf);
 	struct MACH0_(opts_t) opts;
 	MACH0_(opts_set_default) (&opts, bf);
-	struct MACH0_(obj_t) *main_mach0 = MACH0_(new_buf) (fbuf, &opts);
+	struct MACH0_(obj_t) *main_mach0 = MACH0_(new_buf) (bf, fbuf, &opts);
 	if (!main_mach0) {
 		return false;
 	}
@@ -240,6 +240,7 @@ static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
 
 beach:
 	r_buf_free (fbuf);
+	r_rebase_info_free (rebase_info);
 	MACH0_(mach0_free) (main_mach0);
 	return false;
 }
@@ -814,7 +815,7 @@ static struct MACH0_(obj_t) *create_kext_mach0(RKernelCacheObj *obj, RKext *kext
 	MACH0_(opts_set_default) (&opts, bf);
 	opts.verbose = true;
 	opts.header_at = 0;
-	struct MACH0_(obj_t) *mach0 = MACH0_(new_buf) (buf, &opts);
+	struct MACH0_(obj_t) *mach0 = MACH0_(new_buf) (bf, buf, &opts);
 	r_buf_free (buf);
 	return mach0;
 }
@@ -825,7 +826,7 @@ static struct MACH0_(obj_t) *create_kext_shared_mach0(RKernelCacheObj *obj, RKex
 	MACH0_(opts_set_default) (&opts, bf);
 	opts.verbose = false;
 	opts.header_at = kext->range.offset;
-	struct MACH0_(obj_t) *mach0 = MACH0_(new_buf) (buf, &opts);
+	struct MACH0_(obj_t) *mach0 = MACH0_(new_buf) (bf, buf, &opts);
 	// RESULTS IN UAF we should ref and unref instead r_buf_free (buf);
 	return mach0;
 }

@@ -288,7 +288,7 @@ static int rafind_open_file(RafindOptions *ro, const char *file, const ut8 *data
 					k = r_search_keyword_new_hexmask (kw, NULL);
 				}
 			} else if (ro->widestr) {
-				k = r_search_keyword_new_wide (kw, ro->mask, NULL, 0);
+				k = r_search_keyword_new_wide (kw, ro->mask, NULL, 0, ro->bigendian);
 			} else {
 				k = r_search_keyword_new_str (kw, ro->mask, NULL, 0);
 			}
@@ -500,7 +500,7 @@ R_API int r_main_rafind2(int argc, const char **argv) {
 				char *colon = strchr (arg, ':');
 				char *comma = NULL;
 				ut8 buf[8] = {0};
-				int size = (R_SYS_BITS & R_SYS_BITS_64)? 8: 4;
+				int size = R_SYS_BITS_CHECK (R_SYS_BITS, 64)? 8: 4;
 				ut64 value, min_value = 0, max_value = 0;
 
 				if (colon) {
@@ -579,11 +579,14 @@ R_API int r_main_rafind2(int argc, const char **argv) {
 		}
 	}
 	if (ro.pluglist) {
+		// list search plugins when implemented
+#if 0
 		if (ro.json) {
 			r_io_plugin_list_json (ro.io);
 		} else {
 			r_io_plugin_list (ro.io);
 		}
+#endif
 		r_cons_flush ();
 		return 0;
 	}

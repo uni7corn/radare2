@@ -23,7 +23,7 @@ static bool close_but_cb(void *user, void *data, ut32 id) {
 
 // TODO: move to IO as a helper?
 R_API bool r_core_file_close_all_but(RCore *core) {
-	r_id_storage_foreach (core->io->files, close_but_cb, core);
+	r_id_storage_foreach (&core->io->files, close_but_cb, core);
 	return true;
 }
 
@@ -59,7 +59,7 @@ R_API bool r_core_file_reopen(RCore *core, const char *args, int perm, int loadb
 	RBinFile *bf = odesc ? r_bin_file_find_by_fd (core->bin, odesc->fd) : NULL;
 	char *ofilepath = NULL, *obinfilepath = (bf && bf->file)? strdup (bf->file): NULL;
 	bool ret = false;
-	ut64 origoff = core->offset;
+	ut64 origoff = core->addr;
 	if (odesc) {
 		if (odesc->referer) {
 			ofilepath = odesc->referer;
@@ -78,7 +78,12 @@ R_API bool r_core_file_reopen(RCore *core, const char *args, int perm, int loadb
 		}
 	}
 	if (new_baddr == UT64_MAX) {
-		new_baddr = r_config_get_i (core->config, "bin.baddr");
+		if (r_config_get_b (core->config, "bin.aslr")) {
+			new_baddr = ((ut64)r_num_rand (32)) << 24;
+			r_config_set_i (core->config, "bin.baddr", new_baddr);
+		} else {
+			new_baddr = r_config_get_i (core->config, "bin.baddr");
+		}
 	}
 
 	if (r_sandbox_enable (0)) {
@@ -158,7 +163,12 @@ R_API bool r_core_file_reopen(RCore *core, const char *args, int perm, int loadb
 			} else if (new_baddr != UT64_MAX) {
 				baddr = new_baddr;
 			} else {
-				baddr = r_config_get_i (core->config, "bin.baddr");
+				if (r_config_get_b (core->config, "bin.aslr")) {
+					baddr = r_num_rand (32) << 24;
+					r_config_set_i (core->config, "bin.baddr", baddr);
+				} else {
+					baddr = r_config_get_i (core->config, "bin.baddr");
+				}
 			}
 			ret = r_core_bin_load (core, obinfilepath, baddr);
 			r_core_bin_update_arch_bits (core);
@@ -186,6 +196,8 @@ R_API bool r_core_file_reopen(RCore *core, const char *args, int perm, int loadb
 	}
 	r_core_seek (core, origoff, true);
 	if (isdebug) {
+		r_core_cmd0 (core, "arp>$_"); // Fixes a bug where registers are not synced wtf
+		// r_debug_reg_sync (core->dbg, R_REG_TYPE_GPR, false); // does nothing
 		r_core_cmd0 (core, ".dm*");
 		r_core_cmd0 (core, ".dr*");
 		r_core_cmd_call (core, "sr PC");
@@ -260,8 +272,13 @@ R_API char *r_core_sysenv_begin(RCore *core, const char *cmd) {
 	}
 	r_sys_setenv ("R2PM_LEGACY", "0");
 	r_sys_setenv ("R2_COLOR", r_config_get (core->config, "scr.color"));
-	r_sys_setenv ("R2_OFFSET", r_strf ("%"PFMT64d, core->offset));
-	r_sys_setenv ("R2_XOFFSET", r_strf ("0x%08"PFMT64x, core->offset));
+
+	r_sys_setenv ("R2_ADDR", r_strf ("%"PFMT64d, core->addr));
+	r_sys_setenv ("R2_XADDR", r_strf ("0x%08"PFMT64x, core->addr));
+#if 0
+	r_sys_setenv ("R2_OFFSET", r_strf ("%"PFMT64d, core->addr));
+	r_sys_setenv ("R2_XOFFSET", r_strf ("0x%08"PFMT64x, core->addr));
+#endif
 	r_sys_setenv ("R2_BADDR", r_strf ("0x%08"PFMT64x, r_config_get_i (core->config, "bin.baddr")));
 	r_sys_setenv ("R2_ENDIAN", R_ARCH_CONFIG_IS_BIG_ENDIAN (core->rasm->config)? "big": "little");	// XXX
 	r_sys_setenv ("R2_BSIZE", r_strf ("%d", core->blocksize));
@@ -348,7 +365,7 @@ static bool setbpint(RCore *r, const char *mode, const char *sym) {
 	if (!fi) {
 		return false;
 	}
-	bp = r_bp_add_sw (r->dbg->bp, fi->offset, 1, R_BP_PROT_EXEC);
+	bp = r_bp_add_sw (r->dbg->bp, fi->addr, 1, R_BP_PROT_EXEC);
 	if (bp) {
 		bp->internal = true;
 #if __linux__
@@ -453,6 +470,13 @@ static int r_core_file_load_for_io_plugin(RCore *r, ut64 baseaddr, ut64 loadaddr
 	}
 	R_CRITICAL_ENTER (r);
 	r_io_use_fd (r->io, fd);
+	if (baseaddr == UT64_MAX) {
+		// ASLR - this is probably the only place where bin.aslr is used. maybe move into rbin.options before R2_600
+		if (r_config_get_b (r->config, "bin.aslr")) {
+			baseaddr = ((ut64)r_num_rand (32)) << 24;
+			r_config_set_i (r->config, "bin.baddr", baseaddr);
+		}
+	}
 	RBinFileOptions opt;
 	r_bin_file_options_init (&opt, fd, baseaddr, loadaddr, r->bin->rawstr);
 	// opt.fd = fd;
@@ -616,7 +640,7 @@ static bool filecb(void *user, void *data, ut32 id) {
 
 static bool file_is_loaded(RCore *core, const char *lib) {
 	MyFileData filedata = {lib, false};
-	r_id_storage_foreach (core->io->files, filecb, &filedata);
+	r_id_storage_foreach (&core->io->files, filecb, &filedata);
 	return filedata.found;
 }
 
@@ -793,11 +817,11 @@ R_API bool r_core_bin_load(RCore *r, const char *filenameuri, ut64 baddr) {
 				// R_LOG_ERROR ("Cannot find '%s' import in the PLT", imp->name);
 				continue;
 			}
-			ut64 imp_addr = impsym->offset;
+			ut64 imp_addr = impsym->addr;
 			const char *imp_name = r_bin_name_tostring2 (imp->name, 'o');
 			eprintf ("Resolving %s... ", imp_name);
 			RCoreLinkData linkdata = {imp_name, UT64_MAX, r->bin};
-			r_id_storage_foreach (r->io->files, linkcb, &linkdata);
+			r_id_storage_foreach (&r->io->files, linkcb, &linkdata);
 			if (linkdata.addr != UT64_MAX) {
 				eprintf ("0x%08"PFMT64x, linkdata.addr);
 				ut64 a = linkdata.addr;
@@ -832,7 +856,7 @@ R_API bool r_core_bin_load(RCore *r, const char *filenameuri, ut64 baddr) {
 				R_LOG_INFO ("Setting up coredump: Problem while setting the registers");
 			} else {
 				R_LOG_INFO ("Setting up coredump: Registers have been set");
-				const char *regname = r_reg_get_name (r->anal->reg, R_REG_NAME_SP);
+				const char *regname = r_reg_alias_getname (r->anal->reg, R_REG_ALIAS_SP);
 				if (regname) {
 					RRegItem *reg = r_reg_get (r->anal->reg, regname, -1);
 					if (reg) {
@@ -840,7 +864,7 @@ R_API bool r_core_bin_load(RCore *r, const char *filenameuri, ut64 baddr) {
 						stack_map = r_io_map_get_at (r->io, sp_addr);
 					}
 				}
-				regname = r_reg_get_name (r->anal->reg, R_REG_NAME_PC);
+				regname = r_reg_alias_getname (r->anal->reg, R_REG_ALIAS_PC);
 				if (regname) {
 					RRegItem *reg = r_reg_get (r->anal->reg, regname, -1);
 					if (reg) {

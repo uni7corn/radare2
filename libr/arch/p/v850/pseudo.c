@@ -1,9 +1,9 @@
-/* radare - LGPL - Copyright 2020-2022 - pancake */
+/* radare - LGPL - Copyright 2020-2024 - pancake */
 
 #include <r_lib.h>
 #include <r_flag.h>
 #include <r_anal.h>
-#include <r_parse.h>
+#include <r_asm.h>
 
 // https://www.renesas.com/us/en/doc/products/mpumcu/doc/v850/r01us0037ej0100_v850e2.pdf
 
@@ -120,6 +120,7 @@ static int replace(int argc, const char *argv[], char *newstr) {
 	return false;
 }
 
+// UNSAFE
 static char *reorder(char *buf) {
 	char *arr = strstr (buf, "-0x");
 	if (!arr) {
@@ -161,16 +162,16 @@ static void guard_braces(char *buf) {
 	}
 }
 
-static int parse(RParse *p, const char *data, char *str) {
-	if (!strncmp (data, "|| ", 3)) {
+static char *parse(RAsmPluginSession *p, const char *data) {
+	if (r_str_startswith (data, "|| ")) {
 		data += 3;
 	}
 	if (R_STR_ISEMPTY (data)) {
-		*str = 0;
-		return false;
+		return NULL;
 	}
 
 	char *buf = strdup (data);
+	char *str = malloc (strlen (data) + 128);
 	guard_braces (buf);
 	RListIter *iter;
 	char *sp = strchr (buf, ' ');
@@ -195,10 +196,10 @@ static int parse(RParse *p, const char *data, char *str) {
 	free (buf);
 	r_list_free (list);
 
-	return true;
+	return str;
 }
 
-static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len) {
+static char *subvar(RAsmPluginSession *aps, RAnalFunction *f, ut64 addr, int oplen, const char *data) {
 	char *r0 = strstr (data, "[r0]");
 	if (r0) {
 		char *neg = strstr (data, " -");
@@ -208,28 +209,26 @@ static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data
 			free (n);
 			*neg = 0;
 			ut64 addr = UT32_MAX + negdelta + 1;
-			char *res = r_str_newf ("%s 0x%"PFMT64x"%s", data, addr, r0 + 4);
-			strcpy (str, res);
-			free (res);
-			return true;
+			return r_str_newf ("%s 0x%"PFMT64x"%s", data, addr, r0 + 4);
 		}
 	}
-	if (str != data) {
-		r_str_cpy (str, data);
-	}
-	return false;
+	return NULL;
 }
 
-RParsePlugin r_parse_plugin_v850_pseudo = {
-	.name = "v850.pseudo",
-	.desc = "v850 pseudo syntax",
+RAsmPlugin r_asm_plugin_v850 = {
+	.meta = {
+		.name = "v850",
+		.desc = "v850 pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.parse = parse,
-	.subvar = &subvar,
+	.subvar = subvar,
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_v850_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_v850,
 	.version = R2_VERSION};
 #endif

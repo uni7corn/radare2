@@ -195,8 +195,7 @@ R_API RBinSymbol *r_bin_symbol_clone(RBinSymbol *bs) {
 }
 
 // query the symbol name into the symtypes database
-// XXX R2_600 rename to r_bin_import_tags
-R_API const char *r_bin_symbol_unsafe(RBin *bin, const char *name) {
+R_API const char *r_bin_import_tags(RBin *bin, const char *name) {
 	Sdb *db = sdb_ns (bin->sdb, "symclass", true); // R2_600 - rename to imptags
 	if (db) {
 		return sdb_const_get (db, name, 0);
@@ -306,10 +305,9 @@ R_API bool r_bin_open_buf(RBin *bin, RBuffer *buf, RBinFileOptions *opt) {
 		}
 	}
 	if (!bf) {
-		// Uncomment for this speedup: 20s vs 22s
-		// RBuffer *buf = r_buf_new_slurp (bin->file);
-		bf = r_bin_file_new_from_buffer (bin, bin->file? bin->file: "?", buf, bin->rawstr,
-			opt->baseaddr, opt->loadaddr, opt->fd, opt->pluginname);
+		const char *bfile = bin->file? bin->file: "?";
+		opt->rawstr = bin->rawstr;
+		bf = r_bin_file_new_from_buffer (bin, bfile, buf, opt);
 		if (!bf) {
 			return false;
 		}
@@ -570,6 +568,7 @@ static void __printXtrPluginDetails(RBin *bin, RBinXtrPlugin *bx, int json) {
 	}
 }
 
+// TODO: move to libr/core/clist
 R_API bool r_bin_list_plugin(RBin *bin, const char* name, PJ *pj, int json) {
 	RListIter *it;
 	RBinPlugin *bp;
@@ -645,9 +644,8 @@ R_API void r_bin_list(RBin *bin, PJ *pj, int format) {
 		pj_end (pj);
 	} else {
 		r_list_foreach (bin->plugins, it, bp) {
-			bin->cb_printf ("bin  %-11s %s %s %s\n",
-				bp->meta.name, bp->meta.desc, r_str_get (bp->meta.version),
-				r_str_get (bp->meta.author));
+			bin->cb_printf ("bin  %-11s %s\n", bp->meta.name, bp->meta.desc);
+			// bin->cb_printf ("bin  %-11s %s %s %s\n", bp->meta.name, bp->meta.desc, r_str_get (bp->meta.version), r_str_get (bp->meta.author));
 		}
 		r_list_foreach (bin->binxtrs, it, bx) {
 			const char *name = strncmp (bx->meta.name, "xtr.", 4)? bx->meta.name : bx->meta.name + 3;
@@ -760,7 +758,7 @@ R_API RBinSection *r_bin_get_section_at(RBinObject *o, ut64 off, int va) {
 	R_RETURN_VAL_IF_FAIL (o, NULL);
 	RBinSection *section;
 	RListIter *iter;
-	// TODO: must be O(1) .. use sdb here
+	// TODO: must be O(1) .. use memoization or tree or so
 	r_list_foreach (o->sections, iter, section) {
 		if (section->is_segment) {
 			continue;
@@ -1044,7 +1042,7 @@ static char *get_arch_string(const char *arch, int bits, RBinInfo *info) {
 	return r_strbuf_drain (sb);
 }
 
-R_API void r_bin_list_archs(RBin *bin, PJ *pj, int mode) {
+R_API void r_bin_list_archs(RBin *bin, PJ *pj, RTable *t, int mode) {
 	R_RETURN_IF_FAIL (bin);
 
 	char unk[128];
@@ -1072,7 +1070,7 @@ R_API void r_bin_list_archs(RBin *bin, PJ *pj, int mode) {
 	if (!nbinfile) {
 		return;
 	}
-	RTable *table = r_table_new ("bins");
+	RTable *table = t? t: r_table_new ("bins");
 	const char *fmt = "dXnss";
 	if (mode == 'j') {
 		pj_ka (pj, "bins");
@@ -1243,7 +1241,7 @@ R_API RBuffer *r_bin_create(RBin *bin, const char *p,
 R_API RBuffer *r_bin_package(RBin *bin, const char *type, const char *file, RList *files) {
 	if (!strcmp (type, "zip")) {
 		// XXX: implement me
-		r_warn_if_reached ();
+		R_WARN_IF_REACHED ();
 	} else if (!strcmp (type, "fat")) {
 		// XXX: this should be implemented in the fat plugin, not here
 		// XXX should pick the callback from the plugin list
@@ -1687,13 +1685,7 @@ R_API char *r_bin_attr_tostring(ut64 attr, bool singlechar) {
 	return r_strbuf_drain (sb);
 }
 
-// TODO : not implemented yet
-#if R2_USE_NEW_ABI
 R_API ut64 r_bin_attr_fromstring(const char *s, bool compact) {
-#else
-R_API ut64 r_bin_attr_fromstring(const char *s) {
-	const bool compact = false;
-#endif
 	size_t i;
 	ut64 bits = 0LL;
 	const char *word;
@@ -1704,7 +1696,7 @@ R_API ut64 r_bin_attr_fromstring(const char *s) {
 			for (i = 0; i < 64; i++) {
 				const char *bn = attr_bit_name (i, true);
 				if (bn && *w == *bn) {
-					bits |= (1 << i);
+					bits |= (1ULL << i);
 					break;
 				}
 			}
@@ -1728,7 +1720,7 @@ R_API ut64 r_bin_attr_fromstring(const char *s) {
 	return bits;
 }
 
-#if R2_USE_NEW_ABI
+// TODO: Must be a RBinFile.cmd() instead
 R_API bool r_bin_command(RBin *bin, const char *input) {
 	RBinFile *a = r_bin_cur (bin);
 	if (a) {
@@ -1739,4 +1731,3 @@ R_API bool r_bin_command(RBin *bin, const char *input) {
 	}
 	return false;
 }
-#endif

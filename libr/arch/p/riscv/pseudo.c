@@ -1,9 +1,6 @@
-/* radare - LGPL - Copyright 2020 - Aswin C (officialcjunior) */
+/* radare - LGPL - Copyright 2020-2024 - Aswin C (officialcjunior) */
 
-#include <r_lib.h>
-#include <r_flag.h>
-#include <r_anal.h>
-#include <r_parse.h>
+#include <r_asm.h>
 
 static int replace(int argc, const char *argv[], char *newstr) {
 #define MAXPSEUDOOPS 10
@@ -106,19 +103,46 @@ static int replace(int argc, const char *argv[], char *newstr) {
 	return false;
 }
 
-static int parse(RParse *p, const char *data, char *str) {
+static char *patch(RAsmPluginSession *aps, RAnalOp *aop, const char *op) {
+	const char *cmd = NULL;
+	const int size = aop->size;
+	// TODO honor analop->size
+	if (!strcmp (op, "nop")) {
+		if (size < 2) {
+			R_LOG_ERROR ("Can't nop <4 byte instructions");
+			return false;
+		}
+		if (size < 4) {
+			cmd = "wx 0100";
+		} else {
+		       cmd = "wx 13000000";
+		}
+	} else if (!strcmp (op, "jinf")) {
+		if (size < 2) {
+			R_LOG_ERROR ("Minimum jinf is 2 byte");
+			return false;
+		}
+		cmd = "wx 01a0";
+	}
+	return cmd? strdup (cmd): NULL;
+}
+
+static char *parse(RAsmPluginSession *aps, const char *data) {
 	char w0[256], w1[256], w2[256], w3[256];
 	int i, len = strlen (data), n;
-	char *buf, *ptr, *optr, *num;
+	char *ptr, *optr, *num;
 
 	if (len >= sizeof (w0)) {
-		return false;
+		return NULL;
 	}
 	// malloc can be slow here :?
-	if (!(buf = malloc (len + 1))) {
-		return false;
+	char *buf = malloc (len + 1);
+	if (!buf) {
+		return NULL;
 	}
 	memcpy (buf, data, len + 1);
+	char *str = malloc (len + 128);
+	strcpy (str, data);
 	if (*buf) {
 		*w0 = *w1 = *w2 = *w3 = '\0';
 		ptr = strchr (buf, ' ');
@@ -141,12 +165,13 @@ static int parse(RParse *p, const char *data, char *str) {
 				ptr = strchr (ptr+1, ']');
 			}
 			if (ptr && *ptr == '{') {
-				ptr = strchr (ptr+1, '}');
+				ptr = strchr (ptr + 1, '}');
 			}
 			if (!ptr) {
 				eprintf ("Unbalanced bracket\n");
+				free (str);
 				free (buf);
-				return false;
+				return NULL;
 			}
 			ptr = strchr (ptr, ',');
 			if (ptr) {
@@ -213,18 +238,23 @@ static int parse(RParse *p, const char *data, char *str) {
 		free (s);
 	}
 	free (buf);
-	return true;
+	return str;
 }
 
-RParsePlugin r_parse_plugin_riscv_pseudo = {
-	.name = "riscv.pseudo",
-	.desc = "riscv pseudo syntax",
+RAsmPlugin r_asm_plugin_riscv = {
+	.meta = {
+		.name = "riscv",
+		.desc = "riscv pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.parse = parse,
+	.patch = patch
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_riscv_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_riscv,
 	.version = R2_VERSION};
 #endif

@@ -26,7 +26,6 @@ static RCoreHelpMessage help_msg_e = {
 #endif
 	"e.", "a=b", "same as 'e a=b' but without using a space",
 	"e,", "[table-query]", "show the output in table format",
-	"e/", "asm", "filter configuration variables by name",
 	"e:", "k=v:k=v:k=v", "comma or colon separated k[=v]",
 	"e-", "", "reset config vars",
 	"e*", "", "dump config vars in r commands",
@@ -34,6 +33,8 @@ static RCoreHelpMessage help_msg_e = {
 	"ec", "[?] [k] [color]", "set color for given key (prompt, offset, ...)",
 	"ee", " [var]", "open cfg.editor to change the value of var",
 	"ed", "", "open editor to change the ~/.radare2rc",
+	"ed*", "", "show contents of your ~/.radare2c",
+	"ed+", "", "add or set an eval config line into your ~/.radare2c",
 	"ed-", "[!]", "delete ~/.radare2c (Use ed-! to delete without prompting)",
 	"ej", "", "list config vars in JSON",
 	"eJ", "", "list config vars in verbose JSON",
@@ -86,7 +87,7 @@ static RCoreHelpMessage help_msg_eco = {
 static void cmd_eval_table(RCore *core, const char *input) {
 	const char fmt = *input;
 	const char *q = input;
-	RTable *t = r_core_table (core, "eval");
+	RTable *t = r_core_table_new (core, "eval");
 	RTableColumnType *typeString = r_table_type ("string");
 	RTableColumnType *typeBoolean = r_table_type ("bool");
 	r_table_add_column (t, typeBoolean, "ro", 0);
@@ -207,7 +208,7 @@ static bool cmd_load_theme(RCore *core, const char *_arg) {
 	if (R_STR_ISNOTEMPTY (theme_script)) {
 		core->cmdfilter = "ec ";
 		r_core_cmd_lines (core, theme_script);
-		r_cons_pal_update_event ();
+		r_cons_pal_reload ();
 		core->cmdfilter = NULL;
 		ret = true; // maybe the script fails?
 	} else {
@@ -525,25 +526,25 @@ static bool cmd_ec(RCore *core, const char *input) {
 				  if (input[3] == '*') {
 					  r_meta_del (core->anal, R_META_TYPE_HIGHLIGHT, 0, UT64_MAX);
 				  } else {
-					  r_meta_del (core->anal, R_META_TYPE_HIGHLIGHT, core->offset, 1);
-					  // r_meta_set_string (core->anal, R_META_TYPE_HIGHLIGHT, core->offset, "");
+					  r_meta_del (core->anal, R_META_TYPE_HIGHLIGHT, core->addr, 1);
+					  // r_meta_set_string (core->anal, R_META_TYPE_HIGHLIGHT, core->addr, "");
 				  }
 				  r_str_argv_free (argv);
 				  return false;
 			  case '.':
-				  r_meta_print_list_in_function (core->anal, R_META_TYPE_HIGHLIGHT, 0, core->offset, NULL);
+				  r_meta_print_list_in_function (core->anal, R_META_TYPE_HIGHLIGHT, 0, core->addr, NULL, NULL);
 				  r_str_argv_free (argv);
 				  return false;
 			  case '\0':
-				  r_meta_print_list_all (core->anal, R_META_TYPE_HIGHLIGHT, 0, NULL);
+				  r_meta_print_list_all (core->anal, R_META_TYPE_HIGHLIGHT, 0, NULL, NULL);
 				  r_str_argv_free (argv);
 				  return false;
 			  case 'j':
-				  r_meta_print_list_all (core->anal, R_META_TYPE_HIGHLIGHT, 'j', NULL);
+				  r_meta_print_list_all (core->anal, R_META_TYPE_HIGHLIGHT, 'j', NULL, NULL);
 				  r_str_argv_free (argv);
 				  return false;
 			  case '*':
-				  r_meta_print_list_all (core->anal, R_META_TYPE_HIGHLIGHT, '*', NULL);
+				  r_meta_print_list_all (core->anal, R_META_TYPE_HIGHLIGHT, '*', NULL, NULL);
 				  r_str_argv_free (argv);
 				  return false;
 			  case ' ':
@@ -583,11 +584,11 @@ static bool cmd_ec(RCore *core, const char *input) {
 				  r_str_argv_free (argv);
 				  return true;
 			  }
-			  r_meta_set_string (core->anal, R_META_TYPE_HIGHLIGHT, core->offset, "");
-			  const char *str = r_meta_get_string (core->anal, R_META_TYPE_HIGHLIGHT, core->offset);
+			  r_meta_set_string (core->anal, R_META_TYPE_HIGHLIGHT, core->addr, "");
+			  const char *str = r_meta_get_string (core->anal, R_META_TYPE_HIGHLIGHT, core->addr);
 			  char *dup = r_str_newf ("%s \"%s%s\"", r_str_get (str), r_str_get (word),
 					  color_code ? color_code : r_cons_singleton ()->context->pal.wordhl);
-			  r_meta_set_string (core->anal, R_META_TYPE_HIGHLIGHT, core->offset, dup);
+			  r_meta_set_string (core->anal, R_META_TYPE_HIGHLIGHT, core->addr, dup);
 			  r_str_argv_free (argv);
 			  free (color_code);
 			  R_FREE (word);
@@ -605,7 +606,7 @@ static bool cmd_ec(RCore *core, const char *input) {
 				 // Set color
 				 *q++ = 0;
 				 if (r_cons_pal_set (p, q)) {
-					 r_cons_pal_update_event ();
+					 r_cons_pal_reload ();
 				 }
 			 } else {
 				 char color[32] = {0};
@@ -627,6 +628,74 @@ static bool cmd_ec(RCore *core, const char *input) {
 	return true;
 }
 
+static void r2rc_set(RCore *core, R_NULLABLE const char *k, R_NULLABLE const char *v) {
+	char *rcfile = r_file_home (".radare2rc");
+	char *rcdata = r_file_slurp (rcfile, NULL);
+	if (k) {
+		char *line;
+		RListIter *iter;
+		RList *lines = r_str_split_list (rcdata, "\n", 0);
+		RStrBuf *sb = r_strbuf_new ("");
+		bool found = false;
+		char *kk = r_str_newf ("e %s", k);
+		r_list_foreach (lines, iter, line) {
+			const char *oline = line;
+			if (*oline == '\'') {
+				oline++;
+			}
+			if (r_str_startswith (oline, kk)) {
+				if (v) {
+					if (!found && *v) {
+						r_strbuf_appendf (sb, "'e %s=%s\n", k, v);
+					}
+				} else {
+					r_cons_println (line);
+				}
+				found = true;
+			} else {
+				r_strbuf_appendf (sb, "%s\n", line);
+			}
+		}
+		free (kk);
+		if (v) {
+			if (!found && *v) {
+				r_strbuf_appendf (sb, "'e %s=%s\n", k, v);
+			}
+			char *out = r_strbuf_drain (sb);
+			r_list_free (lines);
+			r_str_trim (out);
+			r_file_dump (rcfile, (const ut8*)out, -1, false);
+			free (out);
+		} else {
+			r_strbuf_free (sb);
+		}
+	} else {
+		r_cons_println (rcdata);
+	}
+	free (rcdata);
+	free (rcfile);
+}
+
+static void cmd_eplus(RCore *core, const char *input) {
+	char *s = r_str_trim_dup (input);
+	char *eq = strchr (s, '=');
+	if (*s) {
+		if (eq) {
+			r_str_trim (s);
+			*eq++ = 0;
+			r_str_trim (eq);
+			const char *k = s;
+			const char *v = eq;
+			r2rc_set (core, k, v);
+		} else {
+			r2rc_set (core, s, NULL);
+		}
+	} else {
+		r2rc_set (core, NULL, NULL);
+	}
+	free (s);
+}
+
 static int cmd_eval(void *data, const char *input) {
 	RCore *core = (RCore *)data;
 	switch (input[0]) {
@@ -639,9 +708,6 @@ static int cmd_eval(void *data, const char *input) {
 		case '?': r_config_list (core->config, input + 2, 2); break;
 		default: r_config_list (core->config, input + 1, 3); break;
 		}
-		break;
-	default:
-		r_core_return_invalid_command (core, "e", *input);
 		break;
 	case 't': // "et"
 		if (input[1] == 'a') {
@@ -748,6 +814,14 @@ static int cmd_eval(void *data, const char *input) {
 	case 'd': // "ed"
 		if (input[1] == '?') {
 			r_core_cmd_help_contains (core, help_msg_e, "ed");
+		} else if (input[1] == '*') {
+			char *file = r_file_home (".radare2rc");
+			char *data = r_file_slurp (file, NULL);
+			r_cons_println (data);
+			free (data);
+			free (file);
+		} else if (input[1] == '+') {
+			cmd_eplus (core, input + 2);
 		} else if (input[1] == '-') { // "ed-"
 			const bool prompt = (input[2] != '!');
 			char *file = r_file_home (".radare2rc");
@@ -773,6 +847,9 @@ static int cmd_eval(void *data, const char *input) {
 			}
 			free (file);
 		}
+		break;
+	case '+': // "e+"
+		cmd_eplus (core, input + 1);
 		break;
 	case 'e': // "ee"
 		if (input[1] == ' ') {
@@ -841,6 +918,9 @@ static int cmd_eval(void *data, const char *input) {
 				r_config_eval (core->config, r_str_trim_head_ro (input + 1), false);
 			}
 		}
+		break;
+	default:
+		r_core_return_invalid_command (core, "e", *input);
 		break;
 	}
 	return 0;

@@ -23,33 +23,27 @@ R_API void r_anal_diff_free(RAnalDiff *diff) {
 	}
 }
 
-R_API void r_anal_diff_setup(RAnal *anal, int doops, double thbb, double thfcn) {
+R_API void r_anal_diff_setup(RAnal *anal, bool doops, double thbb, double thfcn) {
 	R_RETURN_IF_FAIL (anal);
-	if (doops >= 0) {
-		anal->diff_ops = doops;
-	}
+	anal->diff_ops = doops;
 	anal->diff_thbb = (thbb >= 0)? thbb: R_ANAL_THRESHOLDBB;
 	anal->diff_thfcn = (thfcn >= 0)? thfcn: R_ANAL_THRESHOLDFCN;
 }
 
-R_API void r_anal_diff_setup_i(RAnal *anal, int doops, int thbb, int thfcn) {
+R_API void r_anal_diff_setup_i(RAnal *anal, bool doops, int thbb, int thfcn) {
 	R_RETURN_IF_FAIL (anal);
-	if (doops >= 0) {
-		anal->diff_ops = doops;
-	}
+	anal->diff_ops = doops;
 	anal->diff_thbb = (thbb >= 0)? ((double)thbb) / 100: R_ANAL_THRESHOLDBB;
 	anal->diff_thfcn = (thfcn >= 0)? ((double)thfcn) / 100: R_ANAL_THRESHOLDFCN;
 }
 
 // Fingerprint function basic block
 R_API int r_anal_diff_fingerprint_bb(RAnal *anal, RAnalBlock *bb) {
+	R_RETURN_VAL_IF_FAIL (anal && bb, 0);
 	RAnalOp *op;
 	ut8 *buf;
 	int oplen, idx = 0;
 
-	if (!anal) {
-		return 0;
-	}
 	if (anal->cur && anal->cur->fingerprint_bb) {
 		return (anal->cur->fingerprint_bb (anal, bb));
 	}
@@ -97,10 +91,11 @@ static int bb_sort_by_addr(const void *x, const void *y) {
 }
 
 R_API size_t r_anal_diff_fingerprint_fcn(RAnal *anal, RAnalFunction *fcn) {
+	R_RETURN_VAL_IF_FAIL (anal && fcn, 0);
 	RAnalBlock *bb;
 	RListIter *iter;
 
-	if (anal && anal->cur && anal->cur->fingerprint_fcn) {
+	if (anal->cur && anal->cur->fingerprint_fcn) {
 		return (anal->cur->fingerprint_fcn (anal, fcn));
 	}
 
@@ -119,13 +114,11 @@ R_API size_t r_anal_diff_fingerprint_fcn(RAnal *anal, RAnalFunction *fcn) {
 }
 
 R_API bool r_anal_diff_bb(RAnal *anal, RAnalFunction *fcn, RAnalFunction *fcn2) {
+	R_RETURN_VAL_IF_FAIL (anal && fcn && fcn2, false);
 	RAnalBlock *bb, *bb2, *mbb, *mbb2;
 	RListIter *iter, *iter2;
 	double t, ot;
 
-	if (!anal || !fcn || !fcn2) {
-		return false;
-	}
 	if (anal->cur && anal->cur->diff_bb) {
 		return (anal->cur->diff_bb (anal, fcn, fcn2));
 	}
@@ -366,11 +359,4 @@ R_API int r_anal_diff_fcn(RAnal *anal, RList *fcns, RList *fcns2) {
 		}
 	}
 	return true;
-}
-
-R_API int r_anal_diff_eval(RAnal *anal) {
-	if (anal && anal->cur && anal->cur->diff_eval) {
-		return (anal->cur->diff_eval (anal));
-	}
-	return true; // XXX: shouldn't this be false?
 }

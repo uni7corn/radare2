@@ -41,6 +41,8 @@ static RCoreHelpMessage help_msg_at = {
 	"@..", "addr", "temporary partial address seek (see s..)",
 	"@!", "blocksize", "temporary change the block size (p8@3!3)",
 	"@{", "from to}", "temporary set from and to for commands supporting ranges",
+	"@%", "env[=value]", "use value stored in env var as tmpseek address",
+	// "@$", "file", "use memory file contents as tmpseek address",
 	"@a:", "arch[:bits]", "temporary set arch and bits",
 	"@b:", "bits", "temporary set asm.bits",
 	"@B:", "nth", "temporary seek to nth instruction in current bb (negative numbers too)", // XXX rename to @n:
@@ -394,6 +396,7 @@ static RCoreHelpMessage help_msg_question_v = {
 	"$MB", "", "alias for $M",
 	"$MD", "", "map distance comparing current offset and map.addr",
 	"$MM", "", "map base address",
+	"$MS", "", "map size",
 
 	"$o", "", "here (current disk io offset)",
 	"$p", "", "getpid()",
@@ -660,14 +663,17 @@ R_API void r_core_clippy(RCore *core, const char *msg) {
 
 #include "visual_riu.inc.c"
 
+const char iuhelp[] =
+"Usage: ?iu fieldname(type,command,value)\n"
+"  Types: string, button, title, run\n"
+"Examples:\n"
+"'?iu name(string,?i;yp,test) addr(string,f~...) ok(button) cancel(button)\n"
+"'?iu addr(string,f~...) hexdump(run,x 32@k:riu.addr) ok(button)\n"
+"Values for every field are saved in the global SdbKv database (see `k` command)\n";
+
 static int cmd_qiu(RCore *core, const char *input) {
 	if (!*input || *input == '?') {
-		r_cons_printf ("Usage: ?iu fieldname(type,command,value)\n");
-		r_cons_printf ("  Types: string, button, title, run\n");
-		r_cons_printf ("Examples:\n");
-		r_cons_printf ("'?iu name(string,?i;yp,test) addr(string,f~...) ok(button) cancel(button)\n");
-		r_cons_printf ("'?iu addr(string,f~...) hexdump(run,x 32@k:riu.addr) ok(button)\n");
-		r_cons_printf ("Values for every field are saved in the global SdbKv database (see `k` command)\n");
+		r_cons_print (iuhelp);
 		return 0;
 	}
 	RIU *riu = riu_new (core, input);
@@ -775,15 +781,11 @@ static int cmd_help(void *data, const char *input) {
 		r_core_cmd_help (core, help_msg_single_quote);
 		break;
 	case 'a': // "?a"
-#if R2_USE_NEW_ABI
 		if (input[1] == 'e') {
 			r_cons_printf ("%s", r_str_chartable ('e'));
 		} else {
 			r_cons_printf ("%s", r_str_chartable (0));
 		}
-#else
-		r_cons_printf ("%s", r_str_asciitable ());
-#endif
 		break;
 	case 'd':
 		{
@@ -791,7 +793,7 @@ static int cmd_help(void *data, const char *input) {
 			ut8 data[32];
 			ut64 n = r_num_math (core->num, input + 1);
 			r_write_le32 (data, n);
-			int res = r_anal_op (core->anal, &aop, core->offset, data, sizeof (data), R_ARCH_OP_MASK_DISASM);
+			int res = r_anal_op (core->anal, &aop, core->addr, data, sizeof (data), R_ARCH_OP_MASK_DISASM);
 			if (res > 0) {
 				r_cons_printf ("bedec   %s\n", aop.mnemonic);
 			} else {
@@ -799,7 +801,7 @@ static int cmd_help(void *data, const char *input) {
 			}
 			r_anal_op_fini (&aop);
 			r_write_be32 (data, n);
-			res = r_anal_op (core->anal, &aop, core->offset, data, sizeof (data), R_ARCH_OP_MASK_DISASM);
+			res = r_anal_op (core->anal, &aop, core->addr, data, sizeof (data), R_ARCH_OP_MASK_DISASM);
 			if (res > 0) {
 				r_cons_printf ("ledec   %s\n", aop.mnemonic);
 			} else {
@@ -1090,6 +1092,7 @@ static int cmd_help(void *data, const char *input) {
 			break;
 		default:
 			r_cons_printf ("0x%"PFMT64x"\n", n);
+			break;
 		}
 		r_core_return_value (core, n); // redundant
 		break;
@@ -1183,7 +1186,7 @@ static int cmd_help(void *data, const char *input) {
 				"$is", "$ij", "$if", "$ir", "$iv", "$in", "$ip",
 				"$fb", "$fs", "$fd", "$fe", "$f",
 				"$e",
-				"$BB", "$BI", "$BS", "$BE", "$BD", "$BC", "$B", "$BJ", "$Bj", "$BF", "$Bf",
+				"$BB", "$BI", "$Bi", "$BS", "$BE", "$BD", "$BC", "$B", "$BJ", "$Bj", "$BF", "$Bf",
 				"$FB", "$FI", "$FS", "$FE", "$Fs", "$FD", "$F",
 				"$Ja", "$M", "$MM",
 				"$o", "$p", "$P", "$s",
@@ -1254,6 +1257,9 @@ static int cmd_help(void *data, const char *input) {
 		case '2':
 			r_cons_printf ("%d\n", R2_VERSION_PATCH);
 			break;
+		default:
+			r_core_return_invalid_command (core, "?V", input[1]);
+			break;
 		}
 		break;
 	case 'l': // "?l"
@@ -1261,18 +1267,18 @@ static int cmd_help(void *data, const char *input) {
 			for (input += 2; input[0] == ' '; input++);
 			r_core_return_value (core, strlen (input));
 		} else {
-			for (input++; input[0] == ' '; input++);
+			input = r_str_trim_head_ro (input + 1);
 			r_core_return_value (core, strlen (input));
 			r_cons_printf ("%" PFMT64d "\n", core->num->value);
 		}
 		break;
 	case 'X': // "?X"
-		for (input++; input[0] == ' '; input++);
+		input = r_str_trim_head_ro (input + 1);
 		n = r_num_math (core->num, input);
 		r_cons_printf ("%"PFMT64x"\n", n);
 		break;
 	case 'x': // "?x"
-		for (input++; input[0] == ' '; input++);
+		input = r_str_trim_head_ro (input + 1);
 		if (*input == '-') {
 			ut8 *out = malloc (strlen (input) + 1);
 			if (out) {
@@ -1293,9 +1299,7 @@ static int cmd_help(void *data, const char *input) {
 			}
 			r_cons_newline ();
 		} else {
-			if (*input == ' ') {
-				input++;
-			}
+			input = r_str_trim_head_ro (input);
 			for (i = 0; input[i]; i++) {
 				r_cons_printf ("%02x", input[i]);
 			}
@@ -1432,7 +1436,7 @@ static int cmd_help(void *data, const char *input) {
 				  free (d);
 			}
 			break;
-		case 'p':
+		case 'p': // "?ep"
 			  {
 				  char *word, *str = strdup (r_str_trim_head_ro (input + 2));
 				  char *legend = strchr (str, ',');
@@ -1444,11 +1448,15 @@ static int cmd_help(void *data, const char *input) {
 				  }
 				  r_str_trim (str);
 				  RList *list = r_str_split_list (str, " ", 0);
-				  int *nums = calloc (sizeof (ut64), r_list_length (list));
+				  int *nums = calloc (sizeof (int), r_list_length (list));
 				  char **text = calloc (sizeof (char *), r_list_length (list));
 				  int i = 0;
 				  r_list_foreach (list, iter, word) {
-					nums[i] = r_num_math (core->num, word);
+					st64 n = r_num_math (core->num, word);
+					if (n >= ST32_MAX || n < 0) {
+						R_LOG_WARN ("Number out of range");
+					}
+					nums[i] = n;
 					i++;
 				  }
 				  int j = 0;
@@ -1459,7 +1467,7 @@ static int cmd_help(void *data, const char *input) {
 					  text[j] = word;
 					  j++;
 				  }
-				  int size = r_config_get_i (core->config, "hex.cols");
+				  const int size = r_config_get_i (core->config, "hex.cols");
 				  r_print_pie (core->print, r_list_length (list), nums, (const char**)text, size);
 				  free (text);
 				  r_list_free (list);
@@ -1475,40 +1483,45 @@ static int cmd_help(void *data, const char *input) {
 			free (newmsg);
 			}
 			break;
-		case 0:
+		case 0: // "?e"
 			r_cons_newline ();
 			break;
-		default:
+		case '?': // "?e?"
 			r_core_cmd_help (core, help_msg_question_e);
 			break;
+		default:
+			r_core_return_invalid_command (core, "?e", input[1]);
+			break;
 		}
 		break;
-	case 's': { // "?s" sequence from to step
-		ut64 from, to, step;
-		char *p, *p2;
-		for (input++; *input == ' '; input++);
-		p = strchr (input, ' ');
-		if (p) {
-			*p = '\0';
-			from = r_num_math (core->num, input);
-			p2 = strchr (p+1, ' ');
-			if (p2) {
-				*p2 = '\0';
-				step = r_num_math (core->num, p2 + 1);
-			} else {
-				step = 1;
+	case 's': // "?s" sequence from to step
+		{
+			input = r_str_trim_head_ro (input + 1);
+			char *p = strchr (input, ' ');
+			if (p) {
+				*p = '\0';
+				ut64 from = r_num_math (core->num, input);
+				char *p2 = strchr (p+1, ' ');
+				int step = 0;
+				if (p2) {
+					*p2 = '\0';
+					step = r_num_math (core->num, p2 + 1);
+				}
+				if (step < 1) {
+					step = 1;
+				}
+				ut64 to = r_num_math (core->num, p + 1);
+				for (; from <= to; from += step) {
+					r_cons_printf ("%"PFMT64d" ", from);
+				}
+				r_cons_newline ();
 			}
-			to = r_num_math (core->num, p + 1);
-			for (;from <= to; from += step)
-				r_cons_printf ("%"PFMT64d" ", from);
-			r_cons_newline ();
 		}
 		break;
-	}
 	case 'P': // "?P"
 		if (core->io->va) {
 			ut64 o, n = (input[0] && input[1])?
-				r_num_math (core->num, input+2): core->offset;
+				r_num_math (core->num, input + 2): core->addr;
 			RIOMap *map = r_io_map_get_paddr (core->io, n);
 			if (map) {
 				o = n + r_io_map_begin (map) - map->delta;
@@ -1517,14 +1530,14 @@ static int cmd_help(void *data, const char *input) {
 				r_cons_printf ("no map at 0x%08"PFMT64x"\n", n);
 			}
 		} else {
-			r_cons_printf ("0x%08"PFMT64x"\n", core->offset);
+			r_cons_printf ("0x%08"PFMT64x"\n", core->addr);
 		}
 		break;
 	case 'p': // "?p"
 		if (core->io->va) {
 			// physical address
 			ut64 o, n = (input[0] && input[1])?
-				r_num_math (core->num, input + 2): core->offset;
+				r_num_math (core->num, input + 2): core->addr;
 			RIOMap *map = r_io_map_get_at (core->io, n);
 			if (map) {
 				o = n - r_io_map_begin (map) + map->delta;
@@ -1533,7 +1546,7 @@ static int cmd_help(void *data, const char *input) {
 				r_cons_printf ("no map at 0x%08"PFMT64x"\n", n);
 			}
 		} else {
-			r_cons_printf ("0x%08"PFMT64x"\n", core->offset);
+			r_cons_printf ("0x%08"PFMT64x"\n", core->addr);
 		}
 		break;
 	case '_': // "?_" hud input
@@ -1569,7 +1582,7 @@ static int cmd_help(void *data, const char *input) {
 				{
 				char foo[1024];
 				r_cons_flush ();
-				for (input+=2; *input == ' '; input++);
+				input = r_str_trim_head_ro (input + 2);
 				// TODO: r_cons_input()
 				snprintf (foo, sizeof (foo) - 1, "%s: ", input);
 				r_line_set_prompt (foo);
@@ -1583,21 +1596,21 @@ static int cmd_help(void *data, const char *input) {
 				 r_cons_any_key (NULL);
 				 break;
 			case 'y': // "?iy"
-				 for (input += 2; *input == ' '; input++);
+				 input = r_str_trim_head_ro (input + 2);
 				 r_core_return_value (core, r_cons_yesno (1, "%s? (Y/n)", input));
 				 break;
 			case 'u':
 				 r_core_return_value (core, cmd_qiu (core, r_str_trim_head_ro (input + 2)));
 				 break;
 			case 'n': // "?in"
-				 for (input += 2; *input == ' '; input++);
+				input = r_str_trim_head_ro (input + 2);
 				 r_core_return_value (core, r_cons_yesno (0, "%s? (y/N)", input));
 				 break;
 			default: {
 				char foo[1024];
 				r_cons_flush ();
-				for (input++; *input == ' '; input++);
-				// TODO: r_cons_input()
+				input = r_str_trim_head_ro (input + 1);
+				// TODO: use r_cons_input()
 				snprintf (foo, sizeof (foo) - 1, "%s: ", input);
 				r_line_set_prompt (foo);
 				r_cons_fgets (foo, sizeof (foo), 0, NULL);
@@ -1648,10 +1661,12 @@ static int cmd_help(void *data, const char *input) {
 		}
 		break;
 	case '\0': // "?"
-	default:
 		// TODO #7967 help refactor
 		r_core_cmd_help (core, help_msg_intro);
 		r_core_cmd_help (core, help_msg_root);
+		break;
+	default:
+		r_core_return_invalid_command (core, "?", input[0]);
 		break;
 	}
 	return 0;

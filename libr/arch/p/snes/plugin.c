@@ -285,14 +285,14 @@ static bool snes_anop(RArchSession *as, RAnalOp *op, RArchDecodeMask mask) {
 		break;
 	case 0xd0: // bne
 		op->eob = true;
-		op->cond = R_ANAL_COND_NE;
+		op->cond = R_ANAL_CONDTYPE_NE;
 		op->jump = addr + 2 + (st8)data[1];
 		op->fail = addr + 2;
 		op->type = R_ANAL_OP_TYPE_CJMP;
 		break;
 	case 0xf0: // beq
 		op->eob = true;
-		op->cond = R_ANAL_COND_EQ;
+		op->cond = R_ANAL_CONDTYPE_EQ;
 		op->jump = addr + 2 + (st8)data[1];
 		op->fail = addr + 2;
 		op->type = R_ANAL_OP_TYPE_CJMP;
@@ -337,7 +337,7 @@ static bool snes_anop(RArchSession *as, RAnalOp *op, RArchDecodeMask mask) {
 const RArchPlugin r_arch_plugin_snes = {
 	.meta = {
 		.name = "snes",
-		.desc = "SNES analysis plugin",
+		.desc = "SNES cpu (aka Ricoh 5A22) based on custom 65C816",
 		.license = "LGPL-3.0-only",
 		.author = "condret",
 	},

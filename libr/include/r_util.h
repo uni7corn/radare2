@@ -44,7 +44,7 @@ int gettimeofday (struct timeval* p, void* tz);
 #include "r_util/r_bitmap.h"
 #include "r_util/r_time.h"
 #include "r_util/r_debruijn.h"
-#include "r_util/r_ctypes.h"
+#include "r_util/r_type.h"
 #include "r_util/r_file.h"
 #include "r_util/r_hex.h"
 #include "r_util/r_log.h"
@@ -65,6 +65,7 @@ int gettimeofday (struct timeval* p, void* tz);
 #include "r_util/r_stack.h"
 #include "r_util/r_str.h"
 #include "r_util/r_strbuf.h"
+#include "r_util/r_bloom.h"
 #include "r_util/r_strpool.h"
 #include "r_util/r_str_constpool.h"
 #include "r_util/r_sys.h"
@@ -88,10 +89,8 @@ int gettimeofday (struct timeval* p, void* tz);
 #include "r_util/r_axml.h"
 // requires io, core, ... #include "r_util/r_print.h"
 
-#if R2_USE_NEW_ABI
 R_API int r_lz4_compress(ut8 *obuf, ut8 *buf, size_t buf_size, const int max_chain);
 R_API ut8 *r_lz4_decompress(const ut8* input, size_t input_size, size_t *output_size);
-#endif
 
 #ifdef __cplusplus
 extern "C" {

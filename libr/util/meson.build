@@ -1,8 +1,9 @@
 subdir('d')
 
 r_util_sources = [
-  'ascii_table.c',
+  'chartable.c',
   'assert.c',
+  'bloom.c',
   'w32.c',
   'rlz4.c',
   'w32dw.c',
@@ -77,6 +78,7 @@ r_util_sources = [
   'str_trim.c',
   'strbuf.c',
   'strpool.c',
+  'ustrpool.c',
   'sys.c',
   'sys_sh.c',
   'syscmd.c',

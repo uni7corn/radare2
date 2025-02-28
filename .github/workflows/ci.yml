@@ -98,7 +98,7 @@ jobs:
         sys/install.sh
     - name: Running tests
       run: r2r -o /tmp/r2r.json test/db/cmd
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: r2r.json
         path: /tmp/r2r.json
@@ -148,12 +148,23 @@ jobs:
       run: |
         export LD_LIBRARY_PATH=/usr/local/lib
         make tests
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: results.json
         path: test/results.json
+  linux-ssl-crypto:
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Installing with ssl crypto
+      run: |
+          sys/install.sh --with-ssl-crypto
+    - name: Running rahash2 tests
+      run: |
+          r2r test/db/tools/rahash2
   linux-static-meson:
-    if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
+#    if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
     continue-on-error: true
     runs-on: ubuntu-20.04
     steps:
@@ -167,14 +178,15 @@ jobs:
         sudo pip3 install meson ninja
     - name: Static r2 build with meson
       run: |
-        CFLAGS="-static" LDFLAGS="-static" meson --prefix=${HOME}/.local --buildtype release --default-library static build
+        # CFLAGS="-static" LDFLAGS="-static"
+        meson --prefix=${HOME}/.local --buildtype release --default-library static build
         ninja -C build && ninja -C build install
     - name: meson gpl-less build
       run: |
         meson -Dnogpl=true build-nogpl
         ninja -C build-nogpl
   macos-test:
-    runs-on: macos-12
+    runs-on: macos-13
     if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
     steps:
     - name: Checkout
@@ -210,7 +222,7 @@ jobs:
     if: contains(github.ref, 'master') || contains(github.ref, 'ci-')
     name: macos-rpath
     continue-on-error: true
-    runs-on: macos-12
+    runs-on: macos-13
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -323,14 +335,14 @@ jobs:
     runs-on: windows-2019
     steps:
     - name: Win configure Pagefile
-      uses: al-cheb/configure-pagefile-action@v1.3
+      uses: al-cheb/configure-pagefile-action@v1.4
       with:
           minimum-size: 16GB
           maximum-size: 16GB
           disk-root: "C:"
     - name: Checkout
       uses: actions/checkout@v4
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: '3.10'
     - name: Preparing nmake
@@ -340,12 +352,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install git+https://github.com/frida/meson.git@f7f25b19a8d71cebf8e2934733eb041eb6862eee
-        pip install ninja r2pipe wget
+        pip install meson ninja r2pipe wget
     - name: Build with meson + ninja
       shell: cmd
       run: |
-        call preconfigure
+        call preconfigure amd64
         call configure release
         call make
     - name: Test executable
@@ -372,7 +383,7 @@ jobs:
         export PATH=${HOME}/.local/bin:${HOME}/Library/Python/3.9/bin:${PATH}
         sudo apt-get --assume-yes install python3-wheel gperf python3-setuptools cabextract gperf gcc-mingw-w64
         sys/mingw32.sh
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: w32-mingw
         path: radare2*.zip
@@ -387,7 +398,7 @@ jobs:
         export PATH=${HOME}/.local/bin:${HOME}/Library/Python/3.9/bin:${PATH}
         sudo apt-get --assume-yes install python3-wheel gperf python3-setuptools cabextract gperf gcc-mingw-w64
         sys/mingw64.sh
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: w64-mingw
         path: radare2*.zip

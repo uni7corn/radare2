@@ -1,7 +1,7 @@
 // R2R db/cmd/numvars
 
 static ut64 getref(RCore *core, int n, char t, int type) {
-	RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset, 0);
+	RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->addr, 0);
 	if (!fcn) {
 		return UT64_MAX;
 	}
@@ -35,7 +35,7 @@ static ut64 invalid_numvar(RCore *core, const char *str) {
 	return 0;
 }
 
-static ut64 numvar_instruction_prev(RCore *core, int n, int *ok) {
+static ut64 numvar_instruction_prev(RCore *core, int n, bool *ok) {
 	if (ok) {
 		*ok = true;
 	}
@@ -47,20 +47,20 @@ static ut64 numvar_instruction_prev(RCore *core, int n, int *ok) {
 	}
 	int numinstr = n;
 	// N previous instructions
-	ut64 addr = core->offset;
+	ut64 addr = core->addr;
 	ut64 val = addr;
-	if (r_core_prevop_addr (core, core->offset, numinstr, &addr)) {
+	if (r_core_prevop_addr (core, core->addr, numinstr, &addr)) {
 		val = addr;
 	} else {
 		ut8 data[32];
-		addr = core->offset;
+		addr = core->addr;
 		const int mininstrsize = r_anal_archinfo (core->anal, R_ARCH_INFO_MINOP_SIZE);
 		for (i = 0; i < numinstr; i++) {
 			ut64 prev_addr = r_core_prevop_addr_force (core, addr, 1);
 			if (prev_addr == UT64_MAX) {
 				prev_addr = addr - mininstrsize;
 			}
-			if (prev_addr == UT64_MAX || prev_addr >= core->offset) {
+			if (prev_addr == UT64_MAX || prev_addr >= core->addr) {
 				break;
 			}
 			RAnalOp op = {0};
@@ -80,7 +80,7 @@ static ut64 numvar_instruction_prev(RCore *core, int n, int *ok) {
 	return val;
 }
 
-static ut64 numvar_instruction_next(RCore *core, ut64 addr, int n, int *ok) {
+static ut64 numvar_instruction_next(RCore *core, ut64 addr, int n, bool *ok) {
 	RAnalOp op;
 	// N forward instructions
 	ut8 data[32];
@@ -104,7 +104,7 @@ static ut64 numvar_instruction_next(RCore *core, ut64 addr, int n, int *ok) {
 
 }
 
-static ut64 numvar_instruction(RCore *core, const char *str, int *ok) {
+static ut64 numvar_instruction(RCore *core, const char *str, bool *ok) {
 #if 0
 * `$j` -> `$ij` jump destination
 * `$f` -> `$if` fail destination
@@ -128,7 +128,7 @@ static ut64 numvar_instruction(RCore *core, const char *str, int *ok) {
 		}
 	}
 	if (ch0 == 'n') { // "$in"
-		return numvar_instruction_next (core, core->offset, count, ok);
+		return numvar_instruction_next (core, core->addr, count, ok);
 	}
 	if (ch0 == 'p') { // "$ip"
 		return numvar_instruction_prev (core, count, ok);
@@ -144,7 +144,7 @@ static ut64 numvar_instruction(RCore *core, const char *str, int *ok) {
 	}
 	RAnalOp op;
 	r_anal_op_init (&op);
-	r_anal_op (core->anal, &op, core->offset, core->block, core->blocksize, R_ARCH_OP_MASK_BASIC);
+	r_anal_op (core->anal, &op, core->addr, core->block, core->blocksize, R_ARCH_OP_MASK_BASIC);
 	r_anal_op_fini (&op); // we don't need strings or pointers, just values, which are not nullified in fini
 	switch (ch0) {
 	case 'j': // "$ij" instruction jump
@@ -172,7 +172,7 @@ static ut64 numvar_instruction(RCore *core, const char *str, int *ok) {
 	return invalid_numvar (core, "invalid $i?");
 }
 
-static ut64 numvar_k(RCore *core, const char *str, int *ok) {
+static ut64 numvar_k(RCore *core, const char *str, bool *ok) {
 	if (!str[2]) {
 		return invalid_numvar (core, "Usage: $k:key or $k{key}");
 	}
@@ -213,7 +213,7 @@ static ut64 numvar_k(RCore *core, const char *str, int *ok) {
 	return invalid_numvar (core, "unknown $k{key}");
 }
 
-static ut64 numvar_section(RCore *core, const char *str, int *ok) {
+static ut64 numvar_section(RCore *core, const char *str, bool *ok) {
 	char ch0 = *str;
 	char *name = NULL;
 	if (ch0) {
@@ -277,7 +277,7 @@ static ut64 numvar_section(RCore *core, const char *str, int *ok) {
 		}
 		R_FREE (name);
 	} else {
-		s = r_bin_get_section_at (bo, core->offset, true);
+		s = r_bin_get_section_at (bo, core->addr, true);
 	}
 	if (!s) {
 		return invalid_numvar (core, "cant find section");
@@ -294,7 +294,7 @@ static ut64 numvar_section(RCore *core, const char *str, int *ok) {
 		return s->size;
 	case 'D': // "$SD"
 	case 'd': // "$SD"
-		return core->offset - s->vaddr;
+		return core->addr - s->vaddr;
 	case 'E': // "$SE"
 	case 'e': // "$SE"
 		return s->vaddr + s->size;
@@ -302,7 +302,7 @@ static ut64 numvar_section(RCore *core, const char *str, int *ok) {
 	return invalid_numvar (core, "unknown $S subvar");
 }
 
-static ut64 numvar_bb(RCore *core, const char *str, int *ok) {
+static ut64 numvar_bb(RCore *core, const char *str, bool *ok) {
 	char ch0 = *str;
 	char *name = NULL;
 	if (ch0) {
@@ -346,15 +346,16 @@ static ut64 numvar_bb(RCore *core, const char *str, int *ok) {
 			ut64 at = r_num_get (&nn, name);
 			R_FREE (name);
 			// TODO check numerrors
-			if (at && at != UT64_MAX) {
-				bb = r_anal_get_block_at (core->anal, at);
-			} else {
+			if (!at || at == UT64_MAX) {
 				return invalid_numvar (core, "cant find basic block");
 			}
+			// bb = r_anal_get_block_at (core->anal, at); // only works at the bb addr
+			bb = r_anal_bb_from_offset (core->anal, at);
 		}
 		R_FREE (name);
 	} else {
-		bb = r_anal_get_block_at (core->anal, core->offset);
+		bb = r_anal_bb_from_offset (core->anal, core->addr);
+		// bb = r_anal_get_block_at (core->anal, core->addr);
 	}
 	if (!bb) {
 		return invalid_numvar (core, "cant find basic block");
@@ -366,10 +367,11 @@ static ut64 numvar_bb(RCore *core, const char *str, int *ok) {
 	/* function bounds (uppercase) */
 	case 0:
 	case 'B': return bb->addr;
-	case 'D': return core->offset - bb->addr;
+	case 'D': return core->addr - bb->addr;
 	case 'E': return bb->addr + bb->size;
 	case 'S': return bb->size;
-	case 'I': return bb->ninstr;
+	case 'I':
+	case 'i': return bb->ninstr;
 	case 'J':
 	case 'j': return bb->jump;
 	case 'F':
@@ -391,7 +393,7 @@ static ut64 numvar_bb(RCore *core, const char *str, int *ok) {
 	return invalid_numvar (core, "unknown $B subvar");
 }
 
-static ut64 numvar_debug(RCore *core, const char *str, int *ok) {
+static ut64 numvar_debug(RCore *core, const char *str, bool *ok) {
 	char ch0 = *str;
 	char *name = NULL;
 	if (ch0) {
@@ -450,7 +452,7 @@ static ut64 numvar_debug(RCore *core, const char *str, int *ok) {
 		}
 		R_FREE (name);
 	} else {
-		const ut64 at = core->offset;
+		const ut64 at = core->addr;
 		r_list_foreach (core->dbg->maps, iter, map) {
 			if (at >= map->addr && at < map->addr_end) {
 				dmap = map;
@@ -473,7 +475,7 @@ static ut64 numvar_debug(RCore *core, const char *str, int *ok) {
 		return dmap->size;
 	case 'D': // "$SD"
 	case 'd': // "$SD"
-		return core->offset - dmap->addr;
+		return core->addr - dmap->addr;
 	case 'E': // "$SE"
 	case 'e': // "$SE"
 		return dmap->addr + dmap->size;
@@ -497,7 +499,7 @@ static bool mapscb(void *user, void *data, ut32 id) {
 	}
 	return true;
 }
-static ut64 numvar_maps(RCore *core, const char *str, int *ok) {
+static ut64 numvar_maps(RCore *core, const char *str, bool *ok) {
 	char ch0 = *str;
 	char *name = NULL;
 	if (ch0) {
@@ -528,7 +530,6 @@ static ut64 numvar_maps(RCore *core, const char *str, int *ok) {
 			}
 			// invalid
 		}
-		R_FREE (name);
 	}
 	RIOMap *map = NULL;
 	if (name) {
@@ -538,12 +539,12 @@ static ut64 numvar_maps(RCore *core, const char *str, int *ok) {
 			map = r_io_map_get_at (core->io, at);
 		} else {
 			MapLoopData mld = { .name = name };
-			r_id_storage_foreach (core->io->maps, mapscb, &mld);
+			r_id_storage_foreach (&core->io->maps, mapscb, &mld);
 			map = mld.map;
 		}
 		R_FREE (name);
 	} else {
-		map = r_io_map_get_at (core->io, core->offset);
+		map = r_io_map_get_at (core->io, core->addr);
 	}
 	if (!map) {
 		return invalid_numvar (core, "cant find a map");
@@ -556,11 +557,11 @@ static ut64 numvar_maps(RCore *core, const char *str, int *ok) {
 	case 'b':
 	case 'B': return r_io_map_begin (map);
 	case 'd':
-	case 'D': return core->offset - r_io_map_begin (map);
+	case 'D': return core->addr - r_io_map_begin (map);
 	case 'e':
 	case 'E': return r_io_map_end (map);
 	case 'S': return r_io_map_size (map);
-	case 'M':
+	case 'M': // "MM"
 		  {
 			  ut64 lower = r_io_map_begin (map);
 			  const int clear_bits = 16;
@@ -572,7 +573,7 @@ static ut64 numvar_maps(RCore *core, const char *str, int *ok) {
 	return invalid_numvar (core, "unknown $M subvar");
 }
 
-static ut64 numvar_function(RCore *core, const char *str, int *ok) {
+static ut64 numvar_function(RCore *core, const char *str, bool *ok) {
 	char ch0 = *str;
 	char *name = NULL;
 	int nth = -1;
@@ -626,7 +627,7 @@ static ut64 numvar_function(RCore *core, const char *str, int *ok) {
 		}
 		R_FREE (name);
 	} else {
-		RList *fcns = r_anal_get_functions_in (core->anal, core->offset);
+		RList *fcns = r_anal_get_functions_in (core->anal, core->addr);
 		if (fcns && r_list_length (fcns) > 0) {
 			fcn = r_list_get_n (fcns, 0);
 		}
@@ -643,7 +644,7 @@ static ut64 numvar_function(RCore *core, const char *str, int *ok) {
 	case 'b':
 	case 'B': return fcn->addr; // begin
 	case 'd':
-	case 'D': return core->offset - fcn->addr; // begin
+	case 'D': return core->addr - fcn->addr; // begin
 	case 'e':
 	case 'E': return r_anal_function_max_addr (fcn); // end
 	case 's': return r_anal_function_linear_size (fcn);
@@ -679,7 +680,7 @@ static ut64 numvar_function(RCore *core, const char *str, int *ok) {
 	return invalid_numvar (core, "unknown $F subvar");
 }
 
-static ut64 numvar_flag(RCore *core, const char *str, int *ok) {
+static ut64 numvar_flag(RCore *core, const char *str, bool *ok) {
 #if 0
 * `$f` -> address of closest flag
   * `$fs` -> flag size
@@ -722,7 +723,7 @@ static ut64 numvar_flag(RCore *core, const char *str, int *ok) {
 		}
 	}
 	RFlagItem *fi = NULL;
-	ut64 addr = core->offset;
+	ut64 addr = core->addr;
 	if (name) {
 		fi = r_flag_get (core->flags, name);
 		if (!fi) {
@@ -734,9 +735,9 @@ static ut64 numvar_flag(RCore *core, const char *str, int *ok) {
 		free (name);
 	}
 	if (!fi) {
-		fi = r_flag_get_i (core->flags, addr);
+		fi = r_flag_get_in (core->flags, addr);
 		if (!fi) {
-			fi = r_flag_get_at (core->flags, core->offset, true);
+			fi = r_flag_get_at (core->flags, core->addr, true);
 		}
 	}
 	if (!fi) {
@@ -745,40 +746,40 @@ static ut64 numvar_flag(RCore *core, const char *str, int *ok) {
 	switch (ch0) {
 	case 0: // "$f"
 	case 'b': // "$fb"
-		return core->offset;
+		return core->addr;
 	case 's': // "$fs"
 		return fi->size;
 	case 'd': // "$fd"
-		return core->offset - fi->offset;
+		return core->addr - fi->addr;
 	case 'e': // "$fe"
-		return fi->offset + fi->size;
+		return fi->addr + fi->size;
 	}
 	return invalid_numvar (core, "unknown $f subvar");
 }
 
-static ut64 numvar_dollar(RCore *core, const char *str, int *ok) {
+static ut64 numvar_dollar(RCore *core, const char *str, bool *ok) {
 	if (!strcmp (str, "$$")) {
-		return core->offset;
+		return core->addr;
 	}
 	if (!strcmp (str, "$$c")) {
 		if (core->print->cur_enabled) {
-			return core->offset + core->print->cur;
+			return core->addr + core->print->cur;
 		}
-		return core->offset;
+		return core->addr;
 	}
 	if (!strcmp (str, "$$$")) {
-		return core->prompt_offset;
+		return core->prompt_addr;
 	}
 	if (!strcmp (str, "$$$c")) {
 		if (core->print->cur_enabled) {
-			return core->prompt_offset + core->print->cur;
+			return core->prompt_addr + core->print->cur;
 		}
-		return core->prompt_offset;
+		return core->prompt_addr;
 	}
 	return invalid_numvar (core, str);
 }
 
-static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
+static ut64 num_callback(RNum *userptr, const char *str, bool *ok) {
 	RCore *core = (RCore *)userptr; // XXX ?
 	char *ptr, *bptr, *out = NULL;
 	RFlagItem *flag;
@@ -796,12 +797,12 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 			if (ok) {
 				*ok = true;
 			}
-			return r_num_tail (core->num, core->offset, str + 2);
+			return r_num_tail (core->num, core->addr, str + 2);
 		}
 		if (core->num->nc.curr_tok == '+') {
 			ut64 off = core->num->nc.number_value.n;
 			if (!off) {
-				off = core->offset;
+				off = core->addr;
 			}
 			RAnalFunction *fcn = r_anal_get_function_at (core->anal, off);
 			if (fcn) {
@@ -851,7 +852,7 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 		}
 		// pop state
 		if (ok) {
-			*ok = 1;
+			*ok = true;
 		}
 		ut8 buf[sizeof (ut64)] = {0};
 		(void)r_io_read_at (core->io, n, buf, R_MIN (sizeof (buf), refsz));
@@ -975,8 +976,8 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 			return numvar_dollar (core, str, ok);
 		case 'o': // $o
 			{
-				RBinSection *s = r_bin_get_section_at (r_bin_cur_object (core->bin), core->offset, true);
-				return s ? core->offset - s->vaddr + s->paddr : core->offset;
+				RBinSection *s = r_bin_get_section_at (r_bin_cur_object (core->bin), core->addr, true);
+				return s ? core->addr - s->vaddr + s->paddr : core->addr;
 			}
 		case 'F': // $F function
 			return numvar_function (core, str + 2, ok);
@@ -999,7 +1000,7 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 				return fcn->addr;
 			}
 #if 0
-			ut64 addr = r_anal_function_label_get (core->anal, core->offset, str);
+			ut64 addr = r_anal_function_label_get (core->anal, core->addr, str);
 			if (addr != 0) {
 				ret = addr;
 			} else {
@@ -1007,7 +1008,7 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 			}
 #endif
 			if ((flag = r_flag_get (core->flags, str))) {
-				ret = flag->offset;
+				ret = flag->addr;
 				if (ok) {
 					*ok = true;
 				}
@@ -1015,23 +1016,8 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 			}
 
 			// check for reg alias
-			struct r_reg_item_t *r = r_reg_get (core->dbg->reg, str, -1);
-			if (!r) {
-				int role = r_reg_get_name_idx (str);
-				if (role != -1) {
-					const char *alias = r_reg_get_name (core->dbg->reg, role);
-					if (alias) {
-						r = r_reg_get (core->dbg->reg, alias, -1);
-						if (r) {
-							if (ok) {
-								*ok = true;
-							}
-							ret = r_reg_get_value (core->dbg->reg, r);
-							return ret;
-						}
-					}
-				}
-			} else {
+			RRegItem *r = r_reg_get (core->dbg->reg, str, -1);
+			if (r) {
 				if (ok) {
 					*ok = true;
 				}

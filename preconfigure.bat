@@ -83,8 +83,8 @@ IF "%~1"=="" (
     ) ELSE IF "!CHOICE!"=="4" (
         SET "TARGET_ARCH=arm64"
     ) ELSE (
-        ECHO Invalid choice. Defaulting to arm64.
-        SET "TARGET_ARCH=arm64"
+        ECHO Invalid choice. Defaulting to amd64.
+        SET "TARGET_ARCH=amd64"
     )
 
     REM Check if target and host are the same and set VSARCH accordingly
@@ -105,6 +105,13 @@ echo === Finding Visual Studio...
 cl --help > NUL 2> NUL
 if %ERRORLEVEL% == 0 (
   echo FOUND
+) else if EXIST %VSINSTALLDIR% (
+  set "vswherePath=C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+  if exist "%vswherePath%" (
+      for /f "tokens=*" %%i in ('"%vswherePath%" -property installationName') do (
+          echo Visual Studio %%i is installed.
+      )
+  call "%VSINSTALLDIR%VC\Auxiliary\Build\vcvarsall.bat" %VSARCH%
 ) else if EXIST "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" (
   echo "Found 2022 Enterprise edition"
   call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" %VSARCH%
@@ -129,28 +136,6 @@ if %ERRORLEVEL% == 0 (
 ) else (
   echo "Not Found"
   exit /b 1
-)
-
-if EXIST "libr\arch\p\arm\v35\arch-arm64" (
-  echo "v35arm64 ok"
-) else (
-  pushd "libr\arch\p\arm\v35"
-  git clone https://github.com/radareorg/vector35-arch-arm64 arch-arm64
-  cd arch-arm64
-  git checkout radare2-wip
-  git reset --hard 55d73c6bbb94448a5c615933179e73ac618cf876
-  popd
-)
-
-if EXIST "libr\arch\p\arm\v35\arch-armv7" (
-  echo "v35armv7 ok"
-) else (
-  pushd "libr\arch\p\arm\v35"
-  git clone https://github.com/radareorg/vector35-arch-armv7 arch-armv7
-  cd arch-armv7
-  git checkout radare2
-  git reset --hard f270a6cc99644cb8e76055b6fa632b25abd26024
-  popd
 )
 
 echo Now you can run 'configure'

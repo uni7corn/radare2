@@ -1,9 +1,6 @@
 /* radare - LGPL - Copyright 2011-2022 - pancake */
 
-#include <r_lib.h>
-#include <r_flag.h>
-#include <r_anal.h>
-#include <r_parse.h>
+#include <r_asm.h>
 
 static int replace(int argc, const char *argv[], char *newstr) {
 	int i,j,k;
@@ -62,30 +59,26 @@ static int replace(int argc, const char *argv[], char *newstr) {
 	return false;
 }
 
-static int parse(RParse *p, const char *data, char *str) {
+static char *parse(RAsmPluginSession *aps, const char *data) {
+	char w0[32], w1[32], w2[32], w3[32];
+	char *optr, *num;
 	int i, n;
-	char w0[32];
-	char w1[32];
-	char w2[32];
-	char w3[32];
-	char *buf, *ptr, *optr, *num;
 
 	// malloc can be slow here :?
-	buf = strdup (data);
+	char *buf = strdup (data);
 	if (!buf) {
-		return false;
+		return NULL;
 	}
 	r_str_trim_head (buf);
 
-	ptr = strchr (buf, '#');
+	char *ptr = strchr (buf, '#');
 	if (ptr) {
 		*ptr = 0;
 		r_str_trim (buf);
 	}
 	if (*buf == '.' || buf[strlen(buf)-1] == ':') {
 		free (buf);
-		strcpy (str, data);
-		return true;
+		return strdup (data);
 	}
 	r_str_replace_char (buf, '$', 0);
 	r_str_replace_char (buf, '%', 0);
@@ -114,7 +107,7 @@ static int parse(RParse *p, const char *data, char *str) {
 			*ptr = '[';
 		}
 	}
-
+	char *str = NULL;
 	if (*buf) {
 		*w0 = *w1 = *w2 = *w3 = 0;
 		ptr = strchr (buf, ' ');
@@ -157,23 +150,29 @@ static int parse(RParse *p, const char *data, char *str) {
 					nw++;
 				}
 			}
+			str = malloc (strlen (data) + 128);
+			strcpy (str, data);
 			replace (nw, wa, str);
 		}
 	}
 	free (buf);
-	return true;
+	return str;
 }
 
-RParsePlugin r_parse_plugin_att2intel = {
-	.name = "att2intel",
-	.desc = "X86 att 2 intel plugin",
-	.parse = &parse,
+RAsmPlugin r_asm_plugin_att2intel = {
+	.meta = {
+		.name = "att2intel",
+		.desc = "X86 att 2 intel plugin",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
+	.parse = parse,
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_att2intel,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_att2intel,
 	.version = R2_VERSION
 };
 #endif

@@ -1,8 +1,7 @@
-/* radare2 - LGPL - Copyright 2017-2023 - wargio, pancake */
+/* radare2 - LGPL - Copyright 2017-2025 - wargio, pancake */
 
 #define R_LOG_ORIGIN "asn1"
 
-#include <r_cons.h>
 #include <r_util.h>
 
 static ut32 asn1_ber_indefinite(const ut8 *buffer, ut32 length) {
@@ -95,6 +94,9 @@ static RASN1Object *asn1_parse_header(const ut8 *buffer_base, const ut8 *buffer,
 		R_LOG_DEBUG ("Truncated object");
 		goto out_error;
 	}
+#if R2_600
+	obj->headerlength = obj->sector - buffer;
+#endif
 	return obj;
 out_error:
 	free (obj);
@@ -220,7 +222,7 @@ R_API char *r_asn1_tostring(RAsn1 *a) {
 	return res;
 }
 
-R_API RASN1Binary *r_asn1_create_binary(const ut8 *buffer, ut32 length) {
+R_API RASN1Binary *r_asn1_binary_new(const ut8 *buffer, ut32 length) {
 	if (!buffer || !length) {
 		return NULL;
 	}
@@ -327,13 +329,45 @@ static RASN1String* asn1_hexdump(RASN1Object *obj, ut32 depth, int fmtmode) {
 		r_strbuf_appendf (sb, "|%-16s|", readable);
 	}
 	char* text = r_strbuf_drain (sb);
-	RASN1String* as = r_asn1_create_string (text, true, strlen (text) + 1);
+	RASN1String* as = r_asn1_string_new (text, true, strlen (text) + 1);
 	if (!as) {
 		/* no memory left.. */
 		free (text);
 	}
 	return as;
 }
+#if R2_600
+/* Remove if adding header_len to RASN1Object and adapting asn1_parse_header() */
+#else
+ut8 asn1_compute_header_length (ut8 klass, ut8 form, ut8 tag, ut32 content_length) {
+	ut8 identifier_length;
+	if (tag < 31) {
+		identifier_length = 1;
+	} else {
+		identifier_length = 1;
+		ut8 tag_octets = 0;
+		while (tag > 0) {
+			tag_octets++;
+			tag >>= 7;
+		}
+		identifier_length += tag_octets;
+	}
+	ut8 length_field_length;
+	if (content_length <= 127) {
+		length_field_length = 1;
+	} else {
+		length_field_length = 1;
+		ut8 length_octets = 0;
+		while (content_length > 0) {
+			length_octets++;
+			content_length >>= 8;
+		}
+		length_field_length += length_octets;
+	}
+	ut8 header_length = identifier_length + length_field_length;
+	return header_length;
+}
+#endif
 
 // XXX this function signature is confusing
 R_API char *r_asn1_object_tostring(RASN1Object *obj, ut32 depth, RStrBuf *sb, PJ *pj, int fmtmode) {
@@ -347,9 +381,11 @@ R_API char *r_asn1_object_tostring(RASN1Object *obj, ut32 depth, RStrBuf *sb, PJ
 	}
 	char temp_name[4096] = {0};
 	ut32 i;
+#if R2_600
+	// hlen can be replaced by obj->headerlength
+#else
 	ut8 hlen = 0;
-	ut32 len = obj->length;
-
+#endif
 	// this shall not be freed. it's a pointer into the buffer.
 	RASN1String* asn1str = NULL;
 	const char* name = "";
@@ -502,11 +538,16 @@ R_API char *r_asn1_object_tostring(RASN1Object *obj, ut32 depth, RStrBuf *sb, PJ
 	if (asn1str) {
 		string = asn1str->string;
 	}
-	for (i = 0; i < 4; i++) {
-		if (len & 0xFF) {
-			hlen++;
-		}
-		len >>= 8;
+
+#if R2_600
+	// hlen can be replaced by obj->headerlength
+#else
+	// Compute header length
+	hlen = asn1_compute_header_length (obj->klass, obj->form, obj->tag, obj->length);
+#endif
+	// Adapt size for BITSTRING
+	if (obj->tag == TAG_BITSTRING) {
+		obj->length++;
 	}
 
 	switch (fmtmode) {
@@ -553,7 +594,6 @@ R_API char *r_asn1_object_tostring(RASN1Object *obj, ut32 depth, RStrBuf *sb, PJ
 				r_strbuf_append (sb, "│ ");
 			}
 		}
-
 		if (obj->tag == TAG_SEQUENCE || obj->tag == TAG_SET || obj->klass == CLASS_CONTEXT) {
 			r_strbuf_append (sb, "├─┬ ");
 		} else {
@@ -563,16 +603,17 @@ R_API char *r_asn1_object_tostring(RASN1Object *obj, ut32 depth, RStrBuf *sb, PJ
 				r_strbuf_append (sb, "└── ");
 			}
 		}
-		if (obj->tag == TAG_SEQUENCE || obj->tag == TAG_SET || obj->klass == CLASS_CONTEXT) {
-			hlen += 2;
-		} else {
-			hlen += 1;
-		}
-		r_strbuf_appendf (sb, " [@ 0x%" PFMT64x "](0x%x bytes)", obj->offset, hlen + obj->length);
+#if R2_600
+		r_strbuf_appendf (sb, " [@ 0x%" PFMT64x "](0x%x + 0x%x)", obj->offset, obj->headerlength, obj->length);
+#else
+		r_strbuf_appendf (sb, " [@ 0x%" PFMT64x "](0x%x + 0x%x)", obj->offset, hlen, obj->length);
+#endif
 		if (obj->tag == TAG_BITSTRING || obj->tag == TAG_INTEGER || obj->tag == TAG_GENERALSTRING) {
 			asn1_hexstring (obj, temp_name, sizeof (temp_name), depth, fmtmode);
 			if (strlen (temp_name) > 100) {
-				r_strbuf_appendf (sb, " - %s...", r_str_newlen (temp_name, 100));
+				r_strbuf_append (sb, " - ");
+				r_strbuf_append_n (sb, temp_name, 100);
+				r_strbuf_append (sb, "...");
 			} else {
 				r_strbuf_appendf (sb, " - %s", temp_name);
 			}
@@ -580,7 +621,9 @@ R_API char *r_asn1_object_tostring(RASN1Object *obj, ut32 depth, RStrBuf *sb, PJ
 			r_strbuf_appendf (sb, " - %02x", obj->tag | 0x20);
 		} else {
 			if (strlen (string) > 100) {
-				r_strbuf_appendf (sb, " - %s...", r_str_newlen (string, 100));
+				r_strbuf_append (sb, " - ");
+				r_strbuf_append_n (sb, string, 100);
+				r_strbuf_append (sb, "...");
 			} else {
 				r_strbuf_appendf (sb, " - %s", string);
 			}
@@ -596,22 +639,19 @@ R_API char *r_asn1_object_tostring(RASN1Object *obj, ut32 depth, RStrBuf *sb, PJ
 	case 0: // verbose default
 	default:
 		if (root) {
-			r_strbuf_append (sb, "  OFFSET   LENGTH DEPTH FORM NAME                : VALUE\n");
+			r_strbuf_appendf (sb, "%8s %4s %s %6s %5s %4s %-20s: %s", "OFFSET", "HDR", "+", "OBJ", "DEPTH", "FORM", "NAME", "VALUE\n");
 		}
 		r_strbuf_appendf (sb, "%#8" PFMT64x, obj->offset);
-
-		if (obj->tag == TAG_SEQUENCE || obj->tag == TAG_SET || obj->klass == CLASS_CONTEXT) {
-			hlen += 2;
-		} else {
-			hlen += 1;
-		}
-
-		r_strbuf_appendf (sb, " %#8x  %4d %4s %-20s: ", hlen + obj->length, depth, obj->form? "cons": "prim", name);
-
+#if R2_600
+		r_strbuf_appendf (sb, " %#4x + %#6x %5d %4s %-20s: ", obj->headerlength, obj->length, depth, obj->form? "cons": "prim", name);
+#else
+		r_strbuf_appendf (sb, " %#4x + %#6x %5d %4s %-20s: ", hlen, obj->length, depth, obj->form? "cons": "prim", name);
+#endif
 		if (obj->tag == TAG_BITSTRING || obj->tag == TAG_INTEGER || obj->tag == TAG_GENERALSTRING) {
 			asn1_hexstring (obj, temp_name, sizeof (temp_name), depth, fmtmode);
 			if (strlen (temp_name) > 100) {
-				r_strbuf_appendf (sb, "%s...", r_str_newlen (temp_name, 100));
+				r_strbuf_append_n (sb, temp_name, 100);
+				r_strbuf_append (sb, "...");
 			} else {
 				r_strbuf_appendf (sb, "%s", temp_name);
 			}
@@ -619,7 +659,8 @@ R_API char *r_asn1_object_tostring(RASN1Object *obj, ut32 depth, RStrBuf *sb, PJ
 			r_strbuf_appendf (sb, "%02x", obj->tag | 0x20);
 		} else {
 			if (strlen (string) > 100) {
-				r_strbuf_appendf (sb, "%s...", r_str_newlen (string, 100));
+				r_strbuf_append_n (sb, string, 100);
+				r_strbuf_append (sb, "...");
 			} else {
 				r_strbuf_appendf (sb, "%s", string);
 			}

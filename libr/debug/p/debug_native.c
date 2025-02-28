@@ -311,16 +311,16 @@ static RDebugReasonType r_debug_native_wait(RDebug *dbg, int pid) {
 
 			/* Check if autoload PDB is set, and load PDB information if yes */
 			RCore *core = dbg->coreb.core;
-			bool autoload_pdb = dbg->coreb.cfggeti (core, "pdb.autoload");
+			bool autoload_pdb = dbg->coreb.cfgGetI (core, "pdb.autoload");
 			if (autoload_pdb) {
 				PLIB_ITEM lib = r->lib;
 #if 0
 				dbg->coreb.cmdf (core, "\"o \\\"%s\\\" 0x%p\"", lib->Path, lib->BaseOfDll);
-				char *o_res = dbg->coreb.cmdstrf (core, "o~+%s", lib->Name);
+				char *o_res = dbg->coreb.cmdStrF (core, "o~+%s", lib->Name);
 				int fd = atoi (o_res);
 				free (o_res);
 				if (fd) {
-					char *pdb_file = dbg->coreb.cmdstr (core, "i~dbg_file");
+					char *pdb_file = dbg->coreb.cmdStr (core, "i~dbg_file");
 					if (pdb_file && (r_str_trim (pdb_file), *pdb_file)) {
 						if (!r_file_exists (pdb_file + 9)) {
 #else
@@ -667,12 +667,14 @@ static int bsd_reg_read(RDebug *dbg, int type, ut8* buf, int size) {
 	case R_REG_TYPE_VEC128: // XMM
 	case R_REG_TYPE_VEC256: // YMM
 	case R_REG_TYPE_VEC512: // ZMM
+#if __i386__ || __x86_64__
 #if __KFBSD__
 		struct ptrace_xstate_info info;
 		ret = ptrace (PT_GETXSTATE_INFO, pid, (caddr_t)&info, sizeof (info));
 		if (info.xsave_len != 0) {
 		ret = ptrace (PT_GETXSTATE, pid, (caddr_t)buf, info.xsave_len);
 		}
+#endif
 #endif
 		break;
 	case R_REG_TYPE_SEG:
@@ -939,7 +941,7 @@ err_linux_map_alloc:
 	return map;
 }
 
-static int linux_map_dealloc(RDebug *dbg, ut64 addr, int size) {
+static bool linux_map_dealloc(RDebug *dbg, ut64 addr, int size) {
 	RBuffer *buf = NULL;
 	char code[1024];
 	ut64 ret = 0;
@@ -977,7 +979,7 @@ static int linux_map_dealloc(RDebug *dbg, ut64 addr, int size) {
 		r_reg_arena_pop (dbg->reg);
 	}
 err_linux_map_dealloc:
-	return (int)ret;
+	return ret == 0;
 }
 #endif
 
@@ -996,7 +998,7 @@ static RDebugMap* r_debug_native_map_alloc(RDebug *dbg, ut64 addr, int size, boo
 #endif
 }
 
-static int r_debug_native_map_dealloc(RDebug *dbg, ut64 addr, int size) {
+static bool r_debug_native_map_dealloc(RDebug *dbg, ut64 addr, int size) {
 #if __APPLE__
 	return xnu_map_dealloc (dbg, addr, size);
 #elif R2__WINDOWS__
@@ -1185,7 +1187,6 @@ static RList *r_debug_native_map_get(RDebug *dbg) {
 }
 
 static RList *r_debug_native_modules_get(RDebug *dbg) {
-R_LOG_INFO ("modules.get");
 	char *lastname = NULL;
 	RDebugMap *map;
 	RListIter *iter, *iter2;
@@ -1324,7 +1325,7 @@ static void set_drx_regs(RDebug *dbg, drxt *regs, size_t num_regs) {
 }
 #endif
 
-static int r_debug_native_drx(RDebug *dbg, int n, ut64 addr, int sz, int rwx, int g, int api_type) {
+static bool r_debug_native_drx(RDebug *dbg, int n, ut64 addr, int sz, int rwx, int g, int api_type) {
 #if __i386__ || __x86_64__
 	int retval = false;
 #if NUM_DRX_REGISTERS > 0
@@ -1580,7 +1581,7 @@ static RList *r_debug_desc_native_list(int pid) {
 #endif
 }
 
-static int r_debug_native_map_protect(RDebug *dbg, ut64 addr, int size, int perms) {
+static bool r_debug_native_map_protect(RDebug *dbg, ut64 addr, int size, int perms) {
 #if R2__WINDOWS__
 	return w32_map_protect (dbg, addr, size, perms);
 #elif __APPLE__
@@ -1588,9 +1589,7 @@ static int r_debug_native_map_protect(RDebug *dbg, ut64 addr, int size, int perm
 #elif __linux__
 	RBuffer *buf = NULL;
 	char code[1024];
-	int num;
-
-	num = r_syscall_get_num (dbg->anal->syscall, "mprotect");
+	const int num = r_syscall_get_num (dbg->anal->syscall, "mprotect");
 	snprintf (code, sizeof (code),
 		"sc@syscall(%d);\n"
 		"main@global(0) { sc(%p,%d,%d);\n"
@@ -1619,12 +1618,8 @@ static int r_debug_native_map_protect(RDebug *dbg, ut64 addr, int size, int perm
 		r_reg_arena_pop (dbg->reg);
 		return true;
 	}
-
-	return false;
-#else
-	// mprotect not implemented for this platform
-	return false;
 #endif
+	return false;
 }
 
 static int r_debug_desc_native_open(const char *path) {
@@ -1658,23 +1653,23 @@ RDebugPlugin r_debug_plugin_native = {
 		.desc = "native debug plugin",
 	},
 #if __i386__
-	.bits = R_SYS_BITS_32,
+	.bits = R_SYS_BITS_PACK (32),
 	.arch = "x86",
 	.canstep = true,
 #elif __s390x__ || __s390__
-	.bits = R_SYS_BITS_64,
+	.bits = R_SYS_BITS_PACK (64),
 	.arch = "s390",
 	.canstep = true,
 #elif __riscv || __riscv__ || __riscv64__
-	.bits = R_SYS_BITS_64,
+	.bits = R_SYS_BITS_PACK (64),
 	.arch = "riscv",
 	.canstep = false,
 #elif __x86_64__
-	.bits = R_SYS_BITS_32 | R_SYS_BITS_64,
+	.bits = R_SYS_BITS_PACK2 (32, 64),
 	.arch = "x86",
 	.canstep = true, // XXX it's 1 on some platforms...
 #elif __aarch64__ || __arm64__ || __arm64e__
-	.bits = R_SYS_BITS_32 | R_SYS_BITS_64,
+	.bits = R_SYS_BITS_PACK2 (32, 64),
 	.arch = "arm",
 #if __APPLE__
 	.canstep = true,
@@ -1682,22 +1677,22 @@ RDebugPlugin r_debug_plugin_native = {
 	.canstep = false,
 #endif
 #elif __arm__
-	.bits = R_SYS_BITS_16 | R_SYS_BITS_32 | R_SYS_BITS_64,
+	.bits = R_SYS_BITS_PACK3 (16, 32, 64),
 	.arch = "arm",
 	.canstep = false,
 #elif __mips__
-	.bits = R_SYS_BITS_32 | R_SYS_BITS_64,
+	.bits = R_SYS_BITS_PACK2 (32, 64),
 	.arch = "mips",
 	.canstep = false,
 #elif __loongarch
-	.bits = R_SYS_BITS_32 | R_SYS_BITS_64,
+	.bits = R_SYS_BITS_PACK2 (32, 64),
 	.arch = "loongarch",
 	.canstep = false,
 #elif __powerpc__
 # if __powerpc64__
-	.bits = R_SYS_BITS_32 | R_SYS_BITS_64,
+	.bits = R_SYS_BITS_PACK2 (32, 64),
 # else
-	.bits = R_SYS_BITS_32,
+	.bits = R_SYS_BITS_PACK (32),
 #endif
 	.arch = "ppc",
 	.canstep = true,

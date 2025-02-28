@@ -782,7 +782,7 @@ static RSignBytes *r_sign_func_empty_mask(RAnal *a, RAnalFunction *fcn) {
 
 	// get size
 	RCore *core = a->coreb.core;
-	int maxsz = a->coreb.cfggeti (core, "zign.maxsz");
+	int maxsz = a->coreb.cfgGetI (core, "zign.maxsz");
 	r_list_sort (fcn->bbs, &bb_sort_by_addr);
 	ut64 ea = fcn->addr;
 	RAnalBlock *bb = (RAnalBlock *)fcn->bbs->tail->data;
@@ -925,7 +925,7 @@ static char *real_function_name(RAnal *a, RAnalFunction *fcn) {
 	ut64 addr = fcn->addr;
 	const char *name = fcn->name;
 	// resolve the manged name
-	char *res = a->coreb.cmdstrf (core, "is,vaddr/eq/0x%"PFMT64x",demangled/cols,a/head/1,:quiet", addr);
+	char *res = a->coreb.cmdStrF (core, "is,vaddr/eq/0x%"PFMT64x",demangled/cols,a/head/1,:quiet", addr);
 	if (res) {
 		r_str_trim (res);
 		if (*res) {
@@ -947,12 +947,8 @@ R_API int r_sign_all_functions(RAnal *a, bool merge) {
 	r_cons_break_push (NULL, NULL);
 	RCoreBind cb = a->coreb;
 	RCore *core = cb.core;
-	bool do_mangled = cb.cfggeti (core, "zign.mangled");
-#if R2_USE_NEW_ABI
+	bool do_mangled = cb.cfgGetI (core, "zign.mangled");
 	bool zign_dups = a->opt.zigndups;
-#else
-	bool zign_dups = cb.cfggeti (core, "zign.dups");
-#endif
 	r_list_foreach_prev (a->fcns, iter, fcn) {
 		if (r_cons_is_breaked ()) {
 			break;
@@ -1588,7 +1584,7 @@ static void list_sanitise_warn(char *s, const char *name, const char *field) {
 		}
 		if (sanitized) {
 			R_LOG_INFO ("%s->%s needs to be sanitized", name, field);
-			r_warn_if_reached ();
+			R_WARN_IF_REACHED ();
 		}
 	}
 }
@@ -1948,7 +1944,7 @@ R_API void r_sign_list(RAnal *a, int format) {
 
 	{ // R2_600 - we need to pass addr as argument
 		RCore *core = a->coreb.core;
-		ut64 addr = core? core->offset: UT64_MAX;
+		ut64 addr = core? core->addr: UT64_MAX;
 		struct ctxListCB ctx = { a, 0, format, pj, addr};
 		r_sign_foreach (a, listCB, &ctx);
 	}
@@ -1992,7 +1988,7 @@ R_API const char *r_sign_type_to_name(int type) {
 	case R_SIGN_BBHASH:
 		return "bbhash";
 	default:
-		r_warn_if_reached ();
+		R_WARN_IF_REACHED ();
 		return "UnknownType";
 	}
 }

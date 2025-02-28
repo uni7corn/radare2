@@ -1,14 +1,7 @@
-/* radare - LGPL - Copyright 2015-2021 - pancake, qnix */
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+/* radare - LGPL - Copyright 2015-2024 - pancake, qnix */
 
 #include <r_lib.h>
-#include <r_util.h>
-#include <r_flag.h>
-#include <r_anal.h>
-#include <r_parse.h>
+#include <r_asm.h>
 
 typedef enum {
 	IND_IDX = 0,
@@ -16,8 +9,8 @@ typedef enum {
 	NORM = 2,
 } ADDR_TYPE;
 
-static int replace(int argc, const char *argv[], char *newstr, ADDR_TYPE type) {
-	int i, j, k;
+static char *replace(int argc, const char *argv[], ADDR_TYPE type) {
+	int i, j;
 	struct {
 		int narg;
 		const char *op;
@@ -70,10 +63,8 @@ static int replace(int argc, const char *argv[], char *newstr, ADDR_TYPE type) {
 		{0, "sei", "set_interrupt" },
 		{1, "jsr", "1()" },
 		{0, NULL}};
-	if (!newstr) {
-		return false;
-	}
 
+	RStrBuf *sb = r_strbuf_new ("");
 	for (i = 0; ops[i].op; i++) {
 		if (ops[i].narg) {
 			if (argc - 1 != ops[i].narg) {
@@ -81,33 +72,32 @@ static int replace(int argc, const char *argv[], char *newstr, ADDR_TYPE type) {
 			}
 		}
 		if (!strcmp (ops[i].op, argv[0])) {
-			for (j = k = 0; ops[i].str[j] != '\0'; j++, k++) {
+			for (j = 0; ops[i].str[j] != '\0'; j++) {
 				if (isdigit(ops[i].str[j])) {
 					const char *w = argv[ops[i].str[j] - '0'];
 					if (w) {
-						strcpy (newstr + k, w);
-						k += strlen(w) - 1;
+						r_strbuf_append (sb, w);
 					}
 				} else {
-					newstr[k] = ops[i].str[j];
+					const char ch = ops[i].str[j];
+					r_strbuf_append_n (sb, &ch, 1);
 				}
 			}
-			newstr[k] = '\0';
 			if (argc == 4 && argv[2][0] == '[') {
-				strcat (newstr + k, "+");
-				strcat (newstr + k + 3, argv[2]);
+				r_strbuf_append (sb, "+");
+				r_strbuf_append (sb, argv[2]); // wtf+3?
+				// strcat (newstr + k, "+");
+				// strcat (newstr + k + 3, argv[2]);
 			}
-			return true;
+			return r_strbuf_drain (sb);
 		}
 	}
 
-	/* TODO: this is slow */
-	newstr[0] = '\0';
 	for (i = 0; i < argc; i++) {
-		strcat (newstr, argv[i]);
-		strcat (newstr, (i == 0 || i == argc - 1) ? " " : ",");
+		r_strbuf_append (sb, argv[i]);
+		r_strbuf_append (sb, (i == 0 || i == argc - 1) ? " " : ",");
 	}
-	return false;
+	return r_strbuf_drain (sb);
 }
 
 static ADDR_TYPE addr_type(const char *str) {
@@ -122,18 +112,20 @@ static ADDR_TYPE addr_type(const char *str) {
 	return NORM;
 }
 
-static int parse(RParse *p, const char *data, char *str) {
+static char *parse(RAsmPluginSession *s, const char *data) {
 	char w0[256], w1[256], w2[256];
 	int i, len = strlen (data);
-	char *buf, *ptr, *optr;
+	char *ptr, *optr;
 	ADDR_TYPE atype;
+	char *str = NULL;
 
 	if (len >= sizeof (w0)) {
-		return false;
+		return NULL;
 	}
 	// malloc can be slow here :?
-	if (!(buf = malloc (len + 1))) {
-		return false;
+	char *buf = malloc (len + 1);
+	if (!buf) {
+		return NULL;
 	}
 	memcpy (buf, data, len + 1);
 
@@ -174,23 +166,27 @@ static int parse(RParse *p, const char *data, char *str) {
 				nw++;
 			}
 		}
-		replace (nw, wa, str, atype);
+		str = replace (nw, wa, atype);
 	}
 
 	free (buf);
 
-	return true;
+	return str;
 }
 
-RParsePlugin r_parse_plugin_6502_pseudo = {
-	.name = "6502.pseudo",
-	.desc = "6502 pseudo syntax",
+RAsmPlugin r_asm_plugin_6502 = {
+	.meta = {
+		.name = "6502",
+		.desc = "6502 pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.parse = parse,
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_6502_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_6502,
 	.version = R2_VERSION};
 #endif

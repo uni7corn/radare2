@@ -558,6 +558,18 @@ err_r_sys_get_env:
 #endif
 }
 
+R_API void r_sys_setenv_asbool(const char *key, bool v) {
+	R_RETURN_IF_FAIL (key);
+	r_sys_setenv (key, v? "1": "0");
+}
+
+R_API void r_sys_setenv_asut64(const char *key, ut64 n) {
+	R_RETURN_IF_FAIL (key);
+	char *env = r_str_newf ("%"PFMT64d, n);
+	r_sys_setenv (key, env);
+	free (env);
+}
+
 R_API bool r_sys_getenv_asbool(const char *key) {
 	R_RETURN_VAL_IF_FAIL (key, false);
 	char *env = r_sys_getenv (key);
@@ -1024,6 +1036,9 @@ R_API const char *r_sys_arch_str(int arch) {
 
 #define USE_FORK 0
 R_API int r_sys_run(const ut8 *buf, int len) {
+	if (!r_sandbox_check (R_SANDBOX_GRAIN_EXEC)) {
+		return -1;
+	}
 	const int sz = 4096;
 	int pdelta, ret, (*cb)();
 // TODO: define R_SYS_ALIGN_FORWARD in r_util.h
@@ -1067,7 +1082,11 @@ R_API int r_sys_run(const ut8 *buf, int len) {
 	return ret;
 }
 
+// TODO. maybe this should be moved into socket/run?
 R_API int r_sys_run_rop(const ut8 *buf, int len) {
+	if (!r_sandbox_check (R_SANDBOX_GRAIN_EXEC)) {
+		return -1;
+	}
 #if USE_FORK
 	int st;
 #endif
@@ -1391,14 +1410,12 @@ R_API RSysInfo *r_sys_info(void) {
 	struct utsname un = {{0}};
 	if (uname (&un) != -1) {
 		RSysInfo *si = R_NEW0 (RSysInfo);
-		if (si) {
-			si->sysname  = strdup (un.sysname);
-			si->nodename = strdup (un.nodename);
-			si->release  = strdup (un.release);
-			si->version  = strdup (un.version);
-			si->machine  = strdup (un.machine);
-			return si;
-		}
+		si->sysname  = strdup (un.sysname);
+		si->nodename = strdup (un.nodename);
+		si->release  = strdup (un.release);
+		si->version  = strdup (un.version);
+		si->machine  = strdup (un.machine);
+		return si;
 	}
 #elif R2__WINDOWS__
 	HKEY key;
@@ -1408,10 +1425,6 @@ R_API RSysInfo *r_sys_info(void) {
 	DWORD minor;
 	char tmp[256] = {0};
 	RSysInfo *si = R_NEW0 (RSysInfo);
-	if (!si) {
-		return NULL;
-	}
-
 	if (RegOpenKeyExA (HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0,
 		KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) {
 		r_sys_perror ("r_sys_info/RegOpenKeyExA");

@@ -92,9 +92,6 @@ static bool fcnAddBB(fcn_t *fcn, bb_t* block) {
 
 static fcn_t* fcnNew(bb_t *block) {
 	fcn_t* fcn = R_NEW0 (fcn_t);
-	if (!fcn) {
-		return NULL;
-	}
 	fcn->addr = block->start;
 	fcn->bbs = r_list_new ();
 	if (!fcnAddBB (fcn, block)) {
@@ -128,17 +125,10 @@ static void initBB(bb_t *bb, ut64 start, ut64 end, ut64 jump, ut64 fail, bb_type
 }
 
 static bool addBB(RList *block_list, ut64 start, ut64 end, ut64 jump, ut64 fail, bb_type_t type, int score) {
-	bb_t *bb = (bb_t*) R_NEW0 (bb_t);
-	if (!bb) {
-		return false;
-	}
+	bb_t *bb = R_NEW0 (bb_t);
 	initBB (bb, start, end, jump, fail, type, score, 0, 0);
 	if (jump < UT64_MAX) {
-		bb_t *jump_bb = (bb_t*) R_NEW0 (bb_t);
-		if (!jump_bb) {
-			free (bb);
-			return false;
-		}
+		bb_t *jump_bb = R_NEW0 (bb_t);
 		if (type == CALL) {
 			initBB (jump_bb, jump, UT64_MAX, UT64_MAX, UT64_MAX, CALL, 0, 1, 1);
 		} else {
@@ -147,11 +137,7 @@ static bool addBB(RList *block_list, ut64 start, ut64 end, ut64 jump, ut64 fail,
 		r_list_append (block_list, jump_bb);
 	}
 	if (fail < UT64_MAX) {
-		bb_t *fail_bb = (bb_t*) R_NEW0 (bb_t);
-		if (!fail_bb) {
-			free (bb);
-			return false;
-		}
+		bb_t *fail_bb = R_NEW0 (bb_t);
 		initBB (fail_bb, fail, UT64_MAX, UT64_MAX, UT64_MAX, FAIL, 0, 1, 0);
 		r_list_append (block_list, fail_bb);
 	}
@@ -241,7 +227,7 @@ static void createFunction(RCore *core, fcn_t* fcn, const char *name) {
 #define Fhandled(x) r_strf ("handled.%"PFMT64x, x)
 R_API bool core_anal_bbs(RCore *core, const char* input) {
 	R_RETURN_VAL_IF_FAIL (core && input, false);
-	if (!r_io_is_valid_offset (core->io, core->offset, false)) {
+	if (!r_io_is_valid_offset (core->io, core->addr, false)) {
 		R_LOG_ERROR ("No valid offset given to analyze");
 		return false;
 	}
@@ -252,7 +238,7 @@ R_API bool core_anal_bbs(RCore *core, const char* input) {
 	HtUP *ht = NULL;
 	SetU *ht2 = NULL;
 #endif
-	const ut64 start = core->offset;
+	const ut64 start = core->addr;
 	ut64 size = input[0] ? r_num_math (core->num, input + 1) : core->blocksize;
 	ut64 b_start = start;
 	RListIter *iter;
@@ -542,7 +528,7 @@ R_API bool core_anal_bbs(RCore *core, const char* input) {
 }
 
 R_API bool core_anal_bbs_range(RCore *core, const char* input) {
-	if (!r_io_is_valid_offset (core->io, core->offset, false)) {
+	if (!r_io_is_valid_offset (core->io, core->addr, false)) {
 		R_LOG_ERROR ("No valid offset given to analyze");
 		return false;
 	}
@@ -554,7 +540,7 @@ R_API bool core_anal_bbs_range(RCore *core, const char* input) {
 	SetU *ht2 = NULL;
 #endif
 	ut64 cur = 0;
-	ut64 start = core->offset;
+	ut64 start = core->addr;
 	ut64 size = input[0] ? r_num_math (core->num, input + 1) : core->blocksize;
 	ut64 b_start = start;
 	RAnalOp *op;

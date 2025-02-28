@@ -62,7 +62,11 @@ static bool decode(RArchSession *a, RAnalOp *op, RArchDecodeMask mask) {
 		}
 		if (insn->detail) {
 			switch (insn->id) {
+#if CS_API_MAJOR > 5
+			case BPF_INS_JAL:
+#else
 			case BPF_INS_JMP:
+#endif
 				op->type = R_ANAL_OP_TYPE_JMP;
 				op->jump = JUMP (0);
 				break;
@@ -332,7 +336,11 @@ void bpf_jump(RArchSession *a, RAnalOp *op, cs_insn *insn, char *condition) {
 
 static void analop_esil(RArchSession *a, RAnalOp *op, cs_insn *insn, ut64 addr) {
 	switch (insn->id) {
+#if CS_API_MAJOR > 5
+	case BPF_INS_JAL:
+#else
 	case BPF_INS_JMP:
+#endif
 		esilprintf (op, "0x%" PFMT64x ",pc,=", op->jump);
 		break;
 	case BPF_INS_JEQ:
@@ -673,7 +681,7 @@ static bool fini(RArchSession *s) {
 const RArchPlugin r_arch_plugin_bpf_cs = {
 	.meta = {
 		.name = "bpf",
-		.desc = "Capstone BPF plugin",
+		.desc = "Capstone BPF bytecode",
 		.license = "BSD-3-Clause",
 		.author = "terorie,aemmitt",
 	},

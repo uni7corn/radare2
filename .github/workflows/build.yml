@@ -43,7 +43,6 @@ jobs:
           cp -f dist/plugins-cfg/plugins.cs6.cfg plugins.cfg
           ./configure-plugins
           sys/install.sh --with-capstone-next
-
   # Source Tarballs
   tarball:
     runs-on: ubuntu-20.04
@@ -192,21 +191,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: arm64
-            macos: 13
-          - arch: x86_64
-            macos: 12
-    runs-on: macos-${{ matrix.macos }}
+        arch:
+          - arm64
+          - x86_64
+    runs-on: macos-13
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-    - name: Install pkg-config with Homebrew
-      run: brew install pkg-config
     - name: Packaging
       env:
         ARCHFLAGS: '-arch ${{ matrix.arch }}'
         CC: gcc -arch ${{ matrix.arch }}
+        LDFLAGS: '-headerpad_max_install_names' # Allow to relocate its dependencies using install_name_tool
       run: make -C dist/macos
     - name: Pub
       uses: actions/upload-artifact@v4
@@ -225,11 +221,11 @@ jobs:
         include:
           - type: cydia
             sdk: true
-    runs-on: macos-12
+    runs-on: macos-13
     steps:
     - uses: actions/checkout@v4
-    - name: Install pkg-config/ldid2 with Homebrew
-      run: brew install pkg-config ldid
+    - name: Install ldid2 with Homebrew
+      run: brew install ldid
     - name: Extract r2 version
       shell: bash
       run: echo "branch=`sys/version.py -n`" >> $GITHUB_OUTPUT
@@ -336,8 +332,7 @@ jobs:
         python-version: '3.10'
     - name: Install dependencies
       run: |
-        pip install git+https://github.com/frida/meson.git@f7f25b19a8d71cebf8e2934733eb041eb6862eee --break-system-packages
-        pip install ninja r2pipe wget --break-system-packages
+        pip install meson ninja r2pipe wget --break-system-packages
     - name: Extract r2 version
       shell: bash
       run: echo "branch=`sys/version.py -n`" >> $GITHUB_OUTPUT
@@ -383,8 +378,7 @@ jobs:
         arch: x64
     - name: Install dependencies
       run: |
-        pip install git+https://github.com/frida/meson.git@f7f25b19a8d71cebf8e2934733eb041eb6862eee --break-system-packages
-        pip install ninja r2pipe wget r2env --break-system-packages
+        pip install meson ninja r2pipe wget r2env --break-system-packages
     - name: Extract r2 version
       shell: bash
       run: echo "branch=`sys/version.py -n`" >> $GITHUB_OUTPUT
@@ -436,8 +430,7 @@ jobs:
         arch: x64
     - name: Install dependencies
       run: |
-        pip install git+https://github.com/frida/meson.git@f7f25b19a8d71cebf8e2934733eb041eb6862eee --break-system-packages
-        pip install ninja r2pipe wget r2env --break-system-packages
+        pip install meson ninja r2pipe wget r2env --break-system-packages
     - name: Extract r2 version
       shell: bash
       run: echo "branch=`sys/version.py -n`" >> $GITHUB_OUTPUT
@@ -486,8 +479,7 @@ jobs:
         arch: x64
     - name: Install dependencies
       run: |
-        pip install git+https://github.com/frida/meson.git@f7f25b19a8d71cebf8e2934733eb041eb6862eee --break-system-packages
-        pip install ninja r2pipe wget --break-system-packages
+        pip install meson ninja r2pipe wget --break-system-packages
     - name: Extract r2 version
       shell: bash
       run: echo "branch=`sys/version.py -n`" >> $GITHUB_OUTPUT
@@ -516,7 +508,35 @@ jobs:
         path: |
           radare2-${{ steps.r2v.outputs.branch }}-w64.zip
 #          radare2-win-installer\Output\radare2.exe
-
+  msys2-w64-meson:
+    strategy:
+      fail-fast: false
+      matrix:
+        sys: [MINGW64, UCRT64]
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: ${{ matrix.sys }}
+        update: true
+        install: base-devel git
+        pacboy: >-
+          cc:p
+          meson:p
+          ninja:p
+    - name: Configure Build
+      shell: msys2 {0}
+      run: |
+        prefix=$(case "${{ matrix.sys }}" in
+          MINGW64) echo /mingw64 ;;
+          UCRT64) echo /ucrt64 ;;
+        esac)
+        meson setup build --prefix=$prefix
+    - name: Compile Project
+      shell: msys2 {0}
+      run: meson compile -C build
 
   # FreeBSD
 #  freebsd:
@@ -556,6 +576,7 @@ jobs:
 
 
   check_abi_compatibility:
+    if: contains(github.ref, 'de345ee04d0777b462f2f98ac383c883')
     needs:
       - linux-static
     runs-on: ubuntu-24.04
@@ -685,7 +706,7 @@ jobs:
         run: sha256sum $ASSET_FILES | awk '{sub(".*/", "", $2); print $1"  "$2}' > checksums.txt
       - name: Create GitHub release
         id: create_release
-        uses: softprops/action-gh-release@975c1b265e11dd76618af1c374e7981f9a6ff44a
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
         with:
           name: ${{ steps.r2v.outputs.branch }}
           tag_name: ${{ needs.check_release.outputs.tag_name }}

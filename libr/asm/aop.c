@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2018-2021 - pancake */
+/* radare - LGPL - Copyright 2018-2025 - pancake */
 
 #include <r_asm.h>
 
@@ -41,20 +41,6 @@ R_DEPRECATE R_API char *r_asm_op_get_hex(RAnalOp *op) {
 	}
 	return str;
 }
-
-// XXX R2_600
-R_DEPRECATE R_API char *r_asm_op_get_asm(RAnalOp *op) {
-	R_RETURN_VAL_IF_FAIL (op, NULL);
-	return op->mnemonic;
-}
-
-#if 0
-UNUSED
-R_API ut8 *r_asm_op_get_buf(RAnalOp *op) {
-	R_RETURN_VAL_IF_FAIL (op, NULL);
-	return op->bytes;
-}
-#endif
 
 R_API int r_asm_op_get_size(RAnalOp *op) {
 	R_RETURN_VAL_IF_FAIL (op, 1);

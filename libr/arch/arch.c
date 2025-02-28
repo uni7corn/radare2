@@ -11,9 +11,6 @@ static void plugin_free(void *p) {
 
 R_API RArch *r_arch_new(void) {
 	RArch *a = R_NEW0 (RArch);
-	if (!a) {
-		return NULL;
-	}
 	a->plugins = r_list_newf ((RListFree)plugin_free);
 	if (!a->plugins) {
 		free (a);
@@ -334,7 +331,7 @@ R_API bool r_arch_decode(RArch *a, RAnalOp *op, RArchDecodeMask mask) {
 			if (align < 1) {
 				align = 1;
 			}
-			int minop = r_arch_info (a, R_ARCH_INFO_INV_OP_SIZE);
+			int minop = r_arch_info (a, R_ARCH_INFO_INVOP_SIZE);
 			// adjust mininstr and align
 			int remai = (op->addr + minop) % align;
 			if (align > 1 && remai) {

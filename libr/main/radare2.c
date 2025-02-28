@@ -66,7 +66,6 @@ static int r_main_version_verify(RCore *core, bool show, bool json) {
 #if !USE_LIB_MAGIC
 		{ "r_magic", r_magic_version },
 #endif
-		{ "r_parse", r_parse_version },
 		{ "r_reg", r_reg_version },
 		{ "r_sign", r_sign_version },
 		{ "r_search", r_search_version },
@@ -116,7 +115,7 @@ static int r_main_version_verify(RCore *core, bool show, bool json) {
 			pj_ko (pj, "thirdparty");
 			{
 				pj_ko (pj, "capstone");
-				pj_ks (pj, "destdir", "shlr/capstone");
+				pj_ks (pj, "destdir", "subprojects/capstone-v*");
 				pj_ks (pj, "git", "https://github.com/capstone-engine/capstone");
 				pj_ks (pj, "branch", "v5");
 				pj_ks (pj, "license", "BSD-3-Clause");
@@ -125,11 +124,11 @@ static int r_main_version_verify(RCore *core, bool show, bool json) {
 			}
 			{
 				pj_ko (pj, "sdb");
-				pj_ks (pj, "destdir", "shlr/sdb");
+				pj_ks (pj, "destdir", "subprojects/sdb");
 				pj_ks (pj, "git", "https://github.com/radareorg/sdb");
 				pj_ks (pj, "branch", "master");
 				pj_ks (pj, "license", "MIT");
-				pj_ks (pj, "commit", "c4db2b24dacd25403ecb084c9b8e7840889ca236");
+				pj_ks (pj, "commit", "2e24eb0616dfce5e28130660313b56db9252dd5c"); // TODO SUBPROJECTS
 				pj_end (pj);
 			}
 			{
@@ -137,17 +136,17 @@ static int r_main_version_verify(RCore *core, bool show, bool json) {
 				pj_ks (pj, "destdir", "libr/arch/p/arm/v35/arch-arm64");
 				pj_ks (pj, "git", "https://github.com/radareorg/vector35-arch-arm64");
 				pj_ks (pj, "license", "Apache-2.0");
-				pj_ks (pj, "commit", "55d73c6bbb94448a5c615933179e73ac618cf876");
-				pj_ks (pj, "branch", "master");
+				pj_ks (pj, "commit", "cb7a22763c112e6ca99558edec2b6a9137234fdc");
+				pj_ks (pj, "branch", "radare2-2024");
 				pj_end (pj);
 			}
 			{
 				pj_ko (pj, "armv7v35");
 				pj_ks (pj, "destdir", "libr/arch/p/arm/v35/arch-armv7");
 				pj_ks (pj, "git", "https://github.com/radareorg/vector35-arch-armv7");
-				pj_ks (pj, "commit", "f270a6cc99644cb8e76055b6fa632b25abd26024");
+				pj_ks (pj, "commit", "7d7a78f52196f6333bd5746dc526684edbfd9af0");
 				pj_ks (pj, "license", "Apache-2.0");
-				pj_ks (pj, "branch", "master");
+				pj_ks (pj, "branch", "radare2-2024");
 				pj_end (pj);
 			}
 			pj_end (pj);
@@ -622,7 +621,6 @@ typedef struct {
 	bool is_gdb;
 	RThread *th_bin;
 	RThread *th_ana;
-	// bool compute_hashes = true;
 	RList *cmds;
 	RList *evals;
 	RList *files;
@@ -1120,10 +1118,11 @@ R_API int r_main_radare2(int argc, const char **argv) {
 		if (mr.quiet_leak) {
 			exit (0);
 		}
+		const char *arg = argv[opt.ind];
 		if (mr.json) {
-			r_io_plugin_list_json (r->io);
+			r_core_list_io (r, arg, 'j');
 		} else {
-			r_io_plugin_list (r->io);
+			r_core_list_io (r, arg, 0);
 		}
 		r_cons_flush ();
 		mainr2_fini (&mr);
@@ -1543,9 +1542,6 @@ R_API int r_main_radare2(int argc, const char **argv) {
 							if (R_STR_ISNOTEMPTY (filepath)) {
 								if (mr.threaded) {
 									ThreadData *td = R_NEW0 (ThreadData);
-									if (!td) {
-										return -1;
-									}
 									td->filepath = strdup (filepath);
 									td->baddr = mr.baddr;
 									td->core = r;
@@ -1591,7 +1587,7 @@ R_API int r_main_radare2(int argc, const char **argv) {
 				R_LOG_WARN ("using oba to load the syminfo from different mapaddress");
 				// load symbols when using r2 -m 0x1000 /bin/ls
 				r_core_cmdf (r, "oba 0 0x%"PFMT64x, mr.mapaddr);
-				r_core_cmd0 (r, ".ies*");
+				r_core_cmd0 (r, ".ie*");
 			}
 		} else if (mr.pfile) {
 			RIODesc *f = r_core_file_open (r, mr.pfile, mr.perms, mr.mapaddr);
@@ -1647,9 +1643,12 @@ R_API int r_main_radare2(int argc, const char **argv) {
 			ret = 1;
 			goto beach;
 		}
-		if (r->bin->cur && r->bin->cur->bo && r->bin->cur->bo->info && r->bin->cur->bo->info->rclass && !strcmp ("fs", r->bin->cur->bo->info->rclass)) {
+		RBinInfo *bi = R_UNWRAP5 (r, bin, cur, bo, info);
+		if (bi && bi->rclass && !strcmp ("fs", bi->rclass)) {
 			const char *fstype = r->bin->cur->bo->info->bclass;
-			r_core_cmdf (r, "m /root %s @ 0", fstype);
+			if (!r_fs_mount (r->fs, fstype, "/root", 0)) {
+				R_LOG_ERROR ("Cannot mount /root");
+			}
 		}
 		r_core_cmd0 (r, "=!"); // initalize io subsystem
 		mr.iod = r->io ? r_io_desc_get (r->io, mr.fh->fd) : NULL;
@@ -1681,11 +1680,11 @@ R_API int r_main_radare2(int argc, const char **argv) {
 		if (!mr.debug && o && !o->regstate) {
 			RFlagItem *fi = r_flag_get (r->flags, "entry0");
 			if (fi) {
-				r_core_seek (r, fi->offset, true);
+				r_core_seek (r, fi->addr, true);
 			} else {
 				fi = r_flag_get (r->flags, "section.0.__TEXT.__text");
 				if (fi) {
-					r_core_seek (r, fi->offset, true);
+					r_core_seek (r, fi->addr, true);
 				} else if (o) {
 					RList *sections = r_bin_get_sections (r->bin);
 					RListIter *iter;
@@ -1709,7 +1708,7 @@ R_API int r_main_radare2(int argc, const char **argv) {
 			r_bin_file_set_hashes (r->bin, r_bin_file_compute_hashes (r->bin, limit));
 		}
 #endif
-		if (!mr.s_seek && mr.mapaddr && mr.mapaddr != r->offset) {
+		if (!mr.s_seek && mr.mapaddr && mr.mapaddr != r->addr) {
 			mr.s_seek = r_str_newf ("0x%08"PFMT64x, mr.mapaddr);
 		}
 		if (mr.s_seek) {
@@ -1723,7 +1722,7 @@ R_API int r_main_radare2(int argc, const char **argv) {
 			r_core_block_size (r, r_io_desc_size (mr.iod));
 		}
 
-		r_core_seek (r, r->offset, true); // read current block
+		r_core_seek (r, r->addr, true); // read current block
 
 		r_list_foreach (mr.evals, iter, cmdn) {
 			r_config_eval (r->config, cmdn, false);
@@ -1756,6 +1755,8 @@ R_API int r_main_radare2(int argc, const char **argv) {
 		if (mr.asmos) {
 			r_config_set (r->config, "asm.os", mr.asmos);
 		}
+		// R2R test/esil/cmp
+		r_core_cmd0 (r, "aei"); // should be implicit
 		r_core_block_read (r);
 	}
 	{
@@ -1797,9 +1798,6 @@ R_API int r_main_radare2(int argc, const char **argv) {
 	if (mr.do_analysis > 0) {
 		if (mr.threaded) {
 			ThreadData *td = R_NEW0 (ThreadData);
-			if (!td) {
-				return -1;
-			}
 			td->th_bin = mr.th_bin;
 			td->do_analysis = mr.do_analysis;
 			td->core = r;
@@ -1822,7 +1820,7 @@ R_API int r_main_radare2(int argc, const char **argv) {
 		r_core_block_size (r, r_io_desc_size (mr.iod));
 	}
 	if (mr.perms & R_PERM_W) {
-		r_core_cmd0 (r, "omfg+w");
+		r_core_cmd0 (r, "ompg+w");
 	}
 	ret = run_commands (r, mr.cmds, mr.files, mr.quiet, mr.do_analysis);
 	r_list_free (mr.cmds);

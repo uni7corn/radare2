@@ -19,7 +19,6 @@ R_API bool r_anal_op_set_bytes(RAnalOp *op, ut64 addr, const ut8* data, int size
 	if (op) {
 		// TODO: use maxopsz from archbits
 		op->addr = addr;
-#if R2_USE_NEW_ABI
 		if (op->weakbytes) {
 			op->weakbytes = false;
 		} else {
@@ -33,7 +32,7 @@ R_API bool r_anal_op_set_bytes(RAnalOp *op, ut64 addr, const ut8* data, int size
 		}
 #endif
 		size = R_MIN (size, 64); // sizeof (op->bytes_buf));
-		if (size < sizeof (op->bytes_buf)) {
+		if (size <= sizeof (op->bytes_buf)) {
 			op->weakbytes = true;
 			op->bytes = op->bytes_buf;
 			memcpy (op->bytes_buf, data, size);
@@ -41,15 +40,6 @@ R_API bool r_anal_op_set_bytes(RAnalOp *op, ut64 addr, const ut8* data, int size
 			op->bytes = r_mem_dup (data, size);
 			op->weakbytes = false;
 		}
-#else
-		size = R_MIN (size, 64); // speedup. no tests fail with 64, but some do with 32.
-		if (op->weakbytes) {
-			op->weakbytes = false;
-		} else {
-			free (op->bytes);
-		}
-		op->bytes = r_mem_dup (data, size);
-#endif
 		op->size = size;
 		return true;
 	}
@@ -64,9 +54,6 @@ R_API RAnalOp *r_anal_op_new(void) {
 
 R_API RAnalOp *r_anal_op_clone(RAnalOp *op) {
 	RAnalOp *nop = R_NEW0 (RAnalOp);
-	if (!nop) {
-		return NULL;
-	}
 	*nop = *op;
 	if (op->mnemonic) {
 		nop->mnemonic = strdup (op->mnemonic);

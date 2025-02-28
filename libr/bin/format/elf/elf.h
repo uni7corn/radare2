@@ -12,6 +12,8 @@
 #define R_BIN_ELF_SCN_IS_EXECUTABLE(x) x & SHF_EXECINSTR
 #define R_BIN_ELF_SCN_IS_READABLE(x)   x & SHF_ALLOC
 #define R_BIN_ELF_SCN_IS_WRITABLE(x)   x & SHF_WRITE
+#define R_BIN_ELF_SCN_IS_COMPRESSED(x)   x & SHF_COMPRESSED
+
 
 #define R_BIN_ELF_SYMTAB_SYMBOLS 1 << 0
 #define R_BIN_ELF_DYNSYM_SYMBOLS 1 << 1
@@ -157,6 +159,7 @@ struct Elf_(obj_t) {
 	ut32 g_reloc_num;
 	bool relocs_loaded;
 	RVector g_relocs;  // RBinElfReloc
+	RList *relocs_list;
 	bool sections_loaded;
 	bool sections_cached;
 #if R2_590

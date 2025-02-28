@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2023 - pancake */
+/* radare - LGPL - Copyright 2009-2025 - pancake */
 
 #include <r_core.h>
 #include "../i/private.h"
@@ -44,13 +44,14 @@ static char *entitlements(RBinFile *bf, bool json) {
 	return NULL;
 }
 
+// TODO: remove laddr, just pass RBinFileOptions which should be inside rbinfile
 static bool load(RBinFile *bf, RBuffer *buf, ut64 laddr) {
 	R_RETURN_VAL_IF_FAIL (bf && buf, false);
 	struct MACH0_(opts_t) opts;
 	MACH0_(opts_set_default) (&opts, bf);
 	opts.parse_start_symbols = true;
 
-	struct MACH0_(obj_t) *mo = MACH0_(new_buf) (buf, &opts);
+	struct MACH0_(obj_t) *mo = MACH0_(new_buf) (bf, buf, &opts);
 	if (mo) {
 		bf->bo->bin_obj = mo;
 		if (mo->chained_starts) {
@@ -77,7 +78,7 @@ static ut64 baddr(RBinFile *bf) {
 	return MACH0_(get_baddr)(mo);
 }
 
-// R2_590 return RVecSegment
+// R2_600 return RVecSegment
 static RList *sections(RBinFile *bf) {
 	struct MACH0_(obj_t) *mo = bf->bo->bin_obj;
 	return MACH0_(get_segments) (bf, mo); // TODO split up sections and segments?
@@ -85,18 +86,16 @@ static RList *sections(RBinFile *bf) {
 
 static RBinAddr *newEntry(ut64 hpaddr, ut64 paddr, int type, int bits) {
 	RBinAddr *ptr = R_NEW0 (RBinAddr);
-	if (ptr) {
-		ptr->paddr = paddr;
-		ptr->vaddr = paddr;
-		ptr->hpaddr = hpaddr;
-		ptr->bits = bits;
-		ptr->type = type;
-		// realign due to thumb
-		if (bits == 16 && ptr->vaddr & 1) {
-			// TODO add hint about thumb entrypoint
-			ptr->paddr--;
-			ptr->vaddr--;
-		}
+	ptr->paddr = paddr;
+	ptr->vaddr = paddr;
+	ptr->hpaddr = hpaddr;
+	ptr->bits = bits;
+	ptr->type = type;
+	// realign due to thumb
+	if (bits == 16 && ptr->vaddr & 1) {
+		// TODO add hint about thumb entrypoint
+		ptr->paddr--;
+		ptr->vaddr--;
 	}
 	return ptr;
 }
@@ -261,17 +260,13 @@ static void _r_bin_reloc_free(RBinReloc *reloc) {
 }
 
 static RList *relocs(RBinFile *bf) {
-	RList *ret = NULL;
-	RBinObject *obj = bf ? bf->bo : NULL;
-	struct MACH0_(obj_t) *bin = (bf && bf->bo)? bf->bo->bin_obj: NULL;
-	if (!obj || !obj->bin_obj || !(ret = r_list_newf ((RListFree)_r_bin_reloc_free))) {
-		return NULL;
-	}
-	ret->free = free;
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
+	struct MACH0_(obj_t) *mo = bf->bo->bin_obj;
 	const RSkipList *relocs = MACH0_(load_relocs) (bf->bo->bin_obj);
 	if (!relocs) {
-		return ret;
+		return NULL;
 	}
+	RList *ret = r_list_newf ((RListFree)_r_bin_reloc_free);
 
 	RSkipListNode *it;
 	struct reloc_t *reloc;
@@ -280,28 +275,32 @@ static RList *relocs(RBinFile *bf) {
 			continue;
 		}
 		RBinReloc *ptr = R_NEW0 (RBinReloc);
-		if (!ptr) {
-			break;
-		}
 		ptr->type = reloc->type;
 		ptr->ntype = reloc->ntype;
 		ptr->additive = 0;
 		if (reloc->name[0]) {
-			RBinImport *imp;
-			if (!(imp = import_from_name (bf->rbin, (char*) reloc->name, bin->imports_by_name))) {
-				free (ptr);
-				break;
-			}
-			ptr->import = imp;
-		} else if (reloc->ord >= 0 && bin->imports_by_ord && reloc->ord < bin->imports_by_ord_size) {
-			ptr->import = bin->imports_by_ord[reloc->ord];
-		} else {
-			ptr->import = NULL;
+			ptr->import = import_from_name (bf->rbin, (char*) reloc->name, mo->imports_by_name);
+		} else if (reloc->ord >= 0 && mo->imports_by_ord && reloc->ord < mo->imports_by_ord_size) {
+			ptr->import = mo->imports_by_ord[reloc->ord];
 		}
 		ptr->addend = reloc->addend;
 		ptr->vaddr = reloc->addr;
 		ptr->paddr = reloc->offset;
 		r_list_append (ret, ptr);
+	}
+	if (mo->reloc_fixups) {
+		RBinReloc *r;
+		RListIter *iter;
+
+		r_list_foreach (mo->reloc_fixups, iter, r) {
+			RBinReloc *ptr = R_NEW0 (RBinReloc);
+			ptr->type = R_BIN_RELOC_64;
+			ut64 paddr = r->paddr + mo->baddr;
+			ptr->vaddr = paddr;
+			ptr->paddr = r->vaddr;
+			ptr->addend = r->vaddr;
+			r_list_append (ret, ptr);
+		}
 	}
 
 	return ret;
@@ -466,7 +465,11 @@ static RList* patch_relocs(RBinFile *bf) {
 		}
 		r_pvector_push (&ext_relocs, reloc);
 	}
+#if 1
+	// XXX for some reason we are patching this twice as relocs and fixups
+	// may be good to find out why and comment back this code with an if0
 	int relocs_count = 0;
+	// fixups are now considered part of the relocs listing
 	if (mo->reloc_fixups != NULL) {
 		relocs_count = r_list_length (mo->reloc_fixups);
 	}
@@ -496,6 +499,7 @@ static RList* patch_relocs(RBinFile *bf) {
 			}
 		}
 	}
+#endif
 	ut64 num_ext_relocs = r_pvector_length (&ext_relocs);
 	if (!num_ext_relocs) {
 		goto beach;
@@ -555,17 +559,15 @@ static RList* patch_relocs(RBinFile *bf) {
 			continue;
 		}
 		RBinReloc *ptr = R_NEW0 (RBinReloc);
-		if (R_LIKELY (ptr)) {
-			ptr->type = reloc->type;
-			ptr->additive = 0;
-			RBinImport *imp = import_from_name (b, (char*) reloc->name, mo->imports_by_name);
-			if (R_LIKELY (imp)) {
-				ptr->vaddr = sym_addr;
-				ptr->import = imp;
-				r_list_append (ret, ptr);
-			} else {
-				free (ptr);
-			}
+		ptr->type = reloc->type;
+		ptr->additive = 0;
+		RBinImport *imp = import_from_name (b, (char*) reloc->name, mo->imports_by_name);
+		if (R_LIKELY (imp)) {
+			ptr->vaddr = sym_addr;
+			ptr->import = imp;
+			r_list_append (ret, ptr);
+		} else {
+			free (ptr);
 		}
 	}
 	if (r_list_empty (ret)) {
@@ -587,11 +589,7 @@ beach:
 static RBuffer *swizzle_io_read(RBinFile *bf, struct MACH0_(obj_t) *obj, RIO *io) {
 	R_RETURN_VAL_IF_FAIL (io && io->desc && io->desc->plugin, NULL);
 	RFixupRebaseContext ctx = {0};
-#if R2_USE_NEW_ABI
 	RBuffer *nb = r_buf_new_with_cache (obj->b, false);
-#else
-	RBuffer *nb = r_buf_new_with_buf (obj->b);
-#endif
 	RBuffer *ob = obj->b;
 	obj->b = nb;
 	ut64 count = r_buf_size (obj->b);
@@ -608,11 +606,9 @@ static RBuffer *swizzle_io_read(RBinFile *bf, struct MACH0_(obj_t) *obj, RIO *io
 
 static void add_fixup(RList *list, ut64 addr, ut64 value) {
 	RBinReloc *r = R_NEW0 (RBinReloc);
-	if (r) {
-		r->vaddr = value;
-		r->paddr = addr;
-		r_list_append (list, r);
-	}
+	r->vaddr = value;
+	r->paddr = addr;
+	r_list_append (list, r);
 }
 
 static bool rebase_buffer_callback2(void *context, RFixupEventDetails * event_details) {
@@ -950,10 +946,8 @@ static RBinAddr *binsym(RBinFile *bf, int sym) {
 			ut64 addr = MACH0_(get_main) (mo);
 			if (addr != UT64_MAX && addr != 0) {
 				ret = R_NEW0 (RBinAddr);
-				if (ret) {
-					ret->vaddr = ((addr >> 1) << 1);
-					ret->paddr = ret->vaddr;
-				}
+				ret->vaddr = ((addr >> 1) << 1);
+				ret->paddr = ret->vaddr;
 			}
 		}
 		break;

@@ -39,20 +39,22 @@ R_API bool r_anal_var_display(RAnal *anal, RAnalVar *var) {
 			const st32 real_delta = var->delta + var->fcn->bp_off;
 			const ut32 udelta = R_ABS (real_delta);
 			const char sign = real_delta >= 0 ? '+' : '-';
+			const char *bpreg = r_reg_alias_getname (anal->reg, R_REG_ALIAS_BP);
 			if (usePxr) {
-				anal->cb_printf ("pxr $w @%s%c0x%x\n", anal->reg->name[R_REG_NAME_BP], sign, udelta);
+				anal->cb_printf ("pxr $w @%s%c0x%x\n", bpreg, sign, udelta);
 			} else {
-				anal->cb_printf ("pf %s @%s%c0x%x\n", fmt, anal->reg->name[R_REG_NAME_BP], sign, udelta);
+				anal->cb_printf ("pf %s @%s%c0x%x\n", fmt, bpreg, sign, udelta);
 			}
 		}
 		break;
 	case R_ANAL_VAR_KIND_SPV:
 		{
 			ut32 udelta = R_ABS (var->delta + var->fcn->maxstack);
+			const char *spreg = r_reg_alias_getname (anal->reg, R_REG_ALIAS_SP);
 			if (usePxr) {
-				anal->cb_printf ("pxr $w @%s+0x%x\n", anal->reg->name[R_REG_NAME_SP], udelta);
+				anal->cb_printf ("pxr $w @%s+0x%x\n", spreg, udelta);
 			} else {
-				anal->cb_printf ("pf %s @ %s+0x%x\n", fmt, anal->reg->name[R_REG_NAME_SP], udelta);
+				anal->cb_printf ("pf %s @ %s+0x%x\n", fmt, spreg, udelta);
 			}
 		}
 		break;
@@ -179,7 +181,7 @@ R_API RAnalVar *r_anal_function_set_var(RAnalFunction *fcn, int delta, char kind
 		free (var->regname);
 		free (var->type);
 	}
-	R_DIRTY (fcn->anal);
+	R_DIRTY_SET (fcn->anal);
 	var->name = strdup (name);
 	var->regname = reg? strdup (reg->name): NULL; // TODO: no strdup here? pool? or not keep regname at all?
 	var->type = strdup (type);
@@ -199,7 +201,7 @@ R_API bool r_anal_function_set_var_prot(RAnalFunction *fcn, RList *l) {
 			return false;
 		}
 	}
-	R_DIRTY (fcn->anal);
+	R_DIRTY_SET (fcn->anal);
 	return true;
 }
 
@@ -481,10 +483,10 @@ R_API ut64 r_anal_var_addr(RAnalVar *var) {
 	RAnal *anal = var->fcn->anal;
 	const char *regname = NULL;
 	if (var->kind == R_ANAL_VAR_KIND_BPV) {
-		regname = r_reg_get_name (anal->reg, R_REG_NAME_BP);
+		regname = r_reg_alias_getname (anal->reg, R_REG_ALIAS_BP);
 		return r_reg_getv (anal->reg, regname) + var->delta + var->fcn->bp_off;
 	} else if (var->kind == R_ANAL_VAR_KIND_SPV) {
-		regname = r_reg_get_name (anal->reg, R_REG_NAME_SP);
+		regname = r_reg_alias_getname (anal->reg, R_REG_ALIAS_SP);
 		return r_reg_getv (anal->reg, regname) + var->delta;
 	}
 	return 0;
@@ -705,7 +707,7 @@ R_API void r_anal_var_remove_access_at(RAnalVar *var, ut64 address) {
 		RPVector *inst_accesses = ht_up_find (var->fcn->inst_vars, (ut64)offset, NULL);
 		r_pvector_remove_data (inst_accesses, var);
 	}
-	R_DIRTY (var->fcn->anal);
+	R_DIRTY_SET (var->fcn->anal);
 }
 
 R_API void r_anal_var_clear_accesses(RAnalVar *var) {
@@ -723,7 +725,7 @@ R_API void r_anal_var_clear_accesses(RAnalVar *var) {
 		}
 	}
 	r_vector_clear (&var->accesses);
-	R_DIRTY (var->fcn->anal);
+	R_DIRTY_SET (var->fcn->anal);
 }
 
 R_API RAnalVarAccess *r_anal_var_get_access_at(RAnalVar *var, ut64 addr) {
@@ -757,25 +759,25 @@ R_API char *r_anal_var_get_constraints_readable(RAnalVar *var) {
 	for (i = 0; i < n; i += 1) {
 		RAnalVarConstraint *constr = r_vector_at (&var->constraints, i);
 		switch (constr->cond) {
-		case R_ANAL_COND_LE:
+		case R_ANAL_CONDTYPE_LE:
 			if (high) {
 				r_strbuf_append (&sb, " && ");
 			}
 			r_strbuf_appendf (&sb, "<= 0x%"PFMT64x, constr->val);
 			low = true;
 			break;
-		case R_ANAL_COND_LT:
+		case R_ANAL_CONDTYPE_LT:
 			if (high) {
 				r_strbuf_append (&sb, " && ");
 			}
 			r_strbuf_appendf (&sb, "< 0x%"PFMT64x, constr->val);
 			low = true;
 			break;
-		case R_ANAL_COND_GE:
+		case R_ANAL_CONDTYPE_GE:
 			r_strbuf_appendf (&sb, ">= 0x%"PFMT64x, constr->val);
 			high = true;
 			break;
-		case R_ANAL_COND_GT:
+		case R_ANAL_CONDTYPE_GT:
 			r_strbuf_appendf (&sb, "> 0x%"PFMT64x, constr->val);
 			high = true;
 			break;
@@ -964,8 +966,8 @@ static void extract_arg(RAnal *anal, RAnalFunction *fcn, RAnalOp *op, const char
 			//XXX: This is a workaround for inconsistent esil
 			val = r_vector_at (&op->dsts, 0);
 			if (!op->stackop && val) {
-				const char *sp = r_reg_get_name (anal->reg, R_REG_NAME_SP);
-				const char *bp = r_reg_get_name (anal->reg, R_REG_NAME_BP);
+				const char *sp = r_reg_alias_getname (anal->reg, R_REG_ALIAS_SP);
+				const char *bp = r_reg_alias_getname (anal->reg, R_REG_ALIAS_BP);
 				const char *rn = val? val->reg: NULL;
 				if (rn && ((bp && !strcmp (bp, rn)) || (sp && !strcmp (sp, rn)))) {
 					if (anal->verbose) {
@@ -1230,7 +1232,7 @@ R_API void r_anal_extract_rarg(RAnal *anal, RAnalOp *op, RAnalFunction *fcn, int
 		RAnalFunction *f = r_anal_get_function_at (anal, offset);
 		if (!f) {
 			RCore *core = (RCore *)anal->coreb.core;
-			RFlagItem *flag = r_flag_get_by_spaces (core->flags, offset, R_FLAGS_FS_IMPORTS, NULL);
+			RFlagItem *flag = r_flag_get_by_spaces (core->flags, false, offset, R_FLAGS_FS_IMPORTS, NULL);
 			if (flag) {
 				callee = r_type_func_guess (TDB, flag->name);
 				if (callee) {
@@ -1410,14 +1412,14 @@ R_API void r_anal_extract_rarg(RAnal *anal, RAnalOp *op, RAnalFunction *fcn, int
 R_API void r_anal_extract_vars(RAnal *anal, RAnalFunction *fcn, RAnalOp *op) {
 	R_RETURN_IF_FAIL (anal && fcn && op);
 
-	const char *BP = anal->reg->name[R_REG_NAME_BP];
-	if (BP) {
-		extract_arg (anal, fcn, op, BP, "+", R_ANAL_VAR_KIND_BPV);
-		extract_arg (anal, fcn, op, BP, "-", R_ANAL_VAR_KIND_BPV);
+	const char *bpreg = r_reg_alias_getname (anal->reg, R_REG_ALIAS_BP);
+	if (bpreg) {
+		extract_arg (anal, fcn, op, bpreg, "+", R_ANAL_VAR_KIND_BPV);
+		extract_arg (anal, fcn, op, bpreg, "-", R_ANAL_VAR_KIND_BPV);
 	}
-	const char *SP = anal->reg->name[R_REG_NAME_SP];
-	if (SP) {
-		extract_arg (anal, fcn, op, SP, "+", R_ANAL_VAR_KIND_SPV);
+	const char *spreg = r_reg_alias_getname (anal->reg, R_REG_ALIAS_SP);
+	if (spreg) {
+		extract_arg (anal, fcn, op, spreg, "+", R_ANAL_VAR_KIND_SPV);
 	}
 }
 
@@ -1630,7 +1632,10 @@ R_API void r_anal_var_list_show(RAnal *anal, RAnalFunction *fcn, int kind, int m
 				pj_ks (pj, "type", var->type);
 				pj_k (pj, "ref");
 				pj_o (pj);
-				pj_ks (pj, "base", anal->reg->name[R_REG_NAME_BP]);
+				{
+					const char *bpreg = r_reg_alias_getname (anal->reg, R_REG_ALIAS_BP);
+					pj_ks (pj, "base", bpreg? bpreg: "BP");
+				}
 				pj_kN (pj, "offset", delta);
 				pj_end (pj);
 				pj_end (pj);
@@ -1662,7 +1667,10 @@ R_API void r_anal_var_list_show(RAnal *anal, RAnalFunction *fcn, int kind, int m
 				pj_ks (pj, "type", var->type);
 				pj_k (pj, "ref");
 				pj_o (pj);
-				pj_ks (pj, "base", anal->reg->name[R_REG_NAME_SP]);
+				{
+					const char *spreg = r_reg_alias_getname (anal->reg, R_REG_ALIAS_SP);
+					pj_ks (pj, "base", spreg? spreg: "SP");
+				}
 				pj_kN (pj, "offset", delta);
 				pj_end (pj);
 				pj_end (pj);
@@ -1675,16 +1683,14 @@ R_API void r_anal_var_list_show(RAnal *anal, RAnalFunction *fcn, int kind, int m
 			case R_ANAL_VAR_KIND_BPV:
 			{
 				int delta = var->delta + fcn->bp_off;
+				const char *bpreg = r_reg_alias_getname (anal->reg, R_REG_ALIAS_BP);
 				if (var->isarg) {
 					anal->cb_printf ("arg %s %s @ %s+0x%x\n",
-						var->type, var->name,
-						anal->reg->name[R_REG_NAME_BP],
-						delta);
+						var->type, var->name, bpreg? bpreg: "BP", delta);
 				} else {
 					char sign = (-var->delta <= fcn->bp_off) ? '+' : '-';
 					anal->cb_printf ("var %s %s @ %s%c0x%x\n",
-						var->type, var->name,
-						anal->reg->name[R_REG_NAME_BP],
+						var->type, var->name, bpreg? bpreg: "BP",
 						sign, R_ABS (delta));
 				}
 			}
@@ -1702,17 +1708,14 @@ R_API void r_anal_var_list_show(RAnal *anal, RAnalFunction *fcn, int kind, int m
 			case R_ANAL_VAR_KIND_SPV:
 			{
 				int delta = newstack? var->delta: fcn->maxstack + var->delta;
+				const char *spreg = r_reg_alias_getname (anal->reg, R_REG_ALIAS_SP);
 				if (!var->isarg) {
 					char sign = (-var->delta <= fcn->maxstack) ? '+' : '-';
 					anal->cb_printf ("var %s %s @ %s%c0x%x\n",
-						var->type, var->name,
-						anal->reg->name[R_REG_NAME_SP],
-						sign, R_ABS (delta));
+						var->type, var->name, spreg? spreg: "SP", sign, R_ABS (delta));
 				} else {
 					anal->cb_printf ("arg %s %s @ %s+0x%x\n",
-						var->type, var->name,
-						anal->reg->name[R_REG_NAME_SP],
-						delta);
+						var->type, var->name, spreg? spreg: "SP", delta);
 
 				}
 			}
@@ -1807,6 +1810,7 @@ R_API char *r_anal_function_format_sig(R_NONNULL RAnal *anal, R_NONNULL RAnalFun
 			}
 			if (R_STR_ISEMPTY (type)) {
 				R_LOG_WARN ("Missing type for arg %d of function '%s'", i, type_fcn_name);
+				free (type);
 				goto beach;
 			}
 			size_t len = strlen (type);

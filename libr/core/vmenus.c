@@ -14,7 +14,7 @@ enum {
 enum {
 	SORT_NONE,
 	SORT_NAME,
-	SORT_OFFSET
+	SORT_ADDR
 };
 
 typedef struct {
@@ -44,9 +44,9 @@ R_IPI void visual_add_comment(RCore *core, ut64 at) {
 	r_core_visual_showcursor (core, true);
 	r_cons_flush ();
 	r_cons_set_raw (false);
-	const ut64 orig = core->offset;
+	const ut64 orig = core->addr;
 	if (at == UT64_MAX) {
-		at = core->offset;
+		at = core->addr;
 		if (core->print->cur_enabled) {
 			at += core->print->cur;
 		}
@@ -237,7 +237,7 @@ R_API bool r_core_visual_esil(RCore *core, const char *input) {
 	REsil *esil = r_esil_new (20, 0, addrsize);
 	r_esil_setup (esil, core->anal, false, false, false);
 	// esil->anal = core->anal;
-	r_esil_set_pc (esil, core->offset);
+	r_esil_set_pc (esil, core->addr);
 	char *expr = NULL;
 	bool refresh = false;
 	for (;;) {
@@ -255,14 +255,14 @@ R_API bool r_core_visual_esil(RCore *core, const char *input) {
 			// bool use_color = core->print->flags & R_PRINT_FLAGS_COLOR;
 			(void) r_asm_disassemble (core->rasm, &asmop, buf, sizeof (ut64));
 			analop.type = -1;
-			(void)r_anal_op (core->anal, &analop, core->offset, buf, sizeof (ut64), R_ARCH_OP_MASK_ESIL);
+			(void)r_anal_op (core->anal, &analop, core->addr, buf, sizeof (ut64), R_ARCH_OP_MASK_ESIL);
 			analopType = analop.type & R_ANAL_OP_TYPE_MASK;
 			r_cons_printf ("r2's esil debugger:\n\n");
 			const char *vi = r_config_get (core->config, "cmd.vprompt");
 			if (R_STR_ISNOTEMPTY (vi)) {
 				r_core_cmd0 (core, vi);
 			}
-			r_cons_printf ("addr: 0x%08"PFMT64x"\n", core->offset);
+			r_cons_printf ("addr: 0x%08"PFMT64x"\n", core->addr);
 			r_cons_printf ("pos: %d\n", x);
 			{
 				char *op_hex = r_asm_op_get_hex (&asmop);
@@ -271,7 +271,7 @@ R_API bool r_core_visual_esil(RCore *core, const char *input) {
 				free (res);
 				free (op_hex);
 			}
-			char *op = colorize_asm_string (core, r_asm_op_get_asm (&asmop), analopType, core->offset);
+			char *op = colorize_asm_string (core, asmop.mnemonic, analopType, core->addr);
 			r_cons_printf (Color_RESET"asm: %s\n"Color_RESET, op);
 			free (op);
 			expr = strdup (r_strbuf_get (&analop.esil));
@@ -336,7 +336,7 @@ R_API bool r_core_visual_esil(RCore *core, const char *input) {
 			esil = r_esil_new (20, 0, addrsize);
 			esil->anal = core->anal;
 			r_core_cmd0 (core, "so+1");
-			r_esil_set_pc (esil, core->offset);
+			r_esil_set_pc (esil, core->addr);
 			break;
 		case 'N':
 		case 'p':
@@ -345,7 +345,7 @@ R_API bool r_core_visual_esil(RCore *core, const char *input) {
 			esil = r_esil_new (20, 0, addrsize);
 			esil->anal = core->anal;
 			r_core_cmd0 (core, "so-1");
-			r_esil_set_pc (esil, core->offset);
+			r_esil_set_pc (esil, core->addr);
 			break;
 		case '=':
 		{ // TODO: edit
@@ -426,7 +426,7 @@ R_API bool r_core_visual_esil(RCore *core, const char *input) {
 			r_cons_clear00 ();
 			r_cons_printf (
 			"VdE?: Visual Esil Debugger Help (aev):\n\n"
-			" q     - quit the bit editor\n"
+			" q     - quit the esil debugger\n"
 			" h/r   - reset / go back (reinitialize esil state)\n"
 			" s     - esil step in\n"
 			" S     - esil step over\n"
@@ -435,6 +435,7 @@ R_API bool r_core_visual_esil(RCore *core, const char *input) {
 			" j/k   - next/prev instruction\n"
 			" n/p   - go next/prev instruction\n"
 			" =     - enter cmd.vprompt command\n"
+			" !     - toggle all bits\n"
 			" :     - enter command\n");
 			r_cons_flush ();
 			r_cons_any_key (NULL);
@@ -474,6 +475,8 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 	const int nbits = sizeof (ut64) * 8;
 	bool colorBits = false;
 	int analopType;
+	ut8 yankBuffer[8] = {0};
+	int yankSize = 0;
 	int i, j, x = 0;
 	RAnalOp analop;
 	ut8 buf[sizeof (ut64)];
@@ -486,16 +489,30 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 	if (core->print->cur != -1) {
 		cur = core->print->cur;
 	}
+	int wordsize = 1;
 	memcpy (buf, core->block + cur, sizeof (ut64));
 	for (;;) {
 		r_anal_op_init (&analop);
 		r_cons_clear00 ();
 		bool use_color = core->print->flags & R_PRINT_FLAGS_COLOR;
-		r_anal_op_set_bytes (&analop, core->offset + cur, buf, sizeof (ut64));
-		(void)r_anal_op (core->anal, &analop, core->offset, buf, sizeof (buf), R_ARCH_OP_MASK_ESIL | R_ARCH_OP_MASK_DISASM);
+		r_anal_op_set_bytes (&analop, core->addr + cur, buf, sizeof (ut64));
+		(void)r_anal_op (core->anal, &analop, core->addr, buf, sizeof (buf), R_ARCH_OP_MASK_ESIL | R_ARCH_OP_MASK_DISASM);
 		analopType = analop.type & R_ANAL_OP_TYPE_MASK;
-		r_cons_printf ("r2's bit editor: (=pfb 3b4b formatting)\n\n");
-		r_cons_printf ("adr: 0x%08"PFMT64x"\n"Color_RESET, core->offset + cur);
+		{
+			ut8 *o = core->block;
+			int bs = core->blocksize;
+			core->block = buf;
+			int stride = r_config_get_i (core->config, "hex.stride");
+			r_config_set_i (core->config, "hex.stride", 1);
+			core->blocksize = sizeof (buf);
+			char *s = r_core_cmd_str (core, "pri1");
+			core->block = o;
+			r_config_set_i (core->config, "hex.stride", stride);
+			core->blocksize = bs;
+			r_cons_print_at (s, 60, 1, 20, 12);
+			free (s);
+		}
+		r_cons_printf ("[0x08%"PFMT64x"]> Vd1 # r2's sprite / bit editor\n\n", core->addr + cur);
 		if (analop.bytes) {
 			char *op_hex = r_hex_bin2strdup (analop.bytes, analop.size);
 			char *res = r_print_hexpair (core->print, op_hex, -1);
@@ -503,13 +520,22 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 			free (res);
 			free (op_hex);
 		}
+		{
+			if (analop.size <= 4) {
+				r_cons_printf ("nle: %d\n", r_read_le32 (buf));
+				r_cons_printf ("nbe: %d\n", r_read_be32 (buf));
+			} else {
+				r_cons_printf ("nle: %"PFMT64d"\n", r_read_le64 (buf));
+				r_cons_printf ("nbe: %"PFMT64d"\n", r_read_be64 (buf));
+			}
+		}
 		r_cons_printf ("len: %d\n", analop.size);
 		{
 			ut32 word = (x % 32);
 			r_cons_printf ("shf: >> %d << %d\n", word, (analop.size * 8) - word - 1);
 		}
 		{
-			char *op = colorize_asm_string (core, analop.mnemonic, analopType, core->offset);
+			char *op = colorize_asm_string (core, analop.mnemonic, analopType, core->addr);
 			if (op) {
 				r_cons_printf (Color_RESET"asm: %s\n"Color_RESET, op);
 				free (op);
@@ -519,7 +545,25 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 			}
 		}
 		r_cons_printf (Color_RESET"esl: %s\n"Color_RESET, r_strbuf_get (&analop.esil));
-		r_cons_printf ("chr:");
+		r_cons_printf ("[w]:");
+		int nbyte = (x / 8);
+		char first = '/';
+		for (i = 0; i < 8; i++) {
+			if (i == 4) {
+				if (i < nbyte + 1) {
+					r_cons_printf ("  ");
+				} else if (i < nbyte + wordsize) {
+					r_cons_printf ("==");
+				}
+			}
+			if (i < nbyte) {
+				r_cons_printf ("         ");
+			} else if (i < nbyte + wordsize) {
+				r_cons_printf ("%c========", first);
+				first = '=';
+			}
+		}
+		r_cons_printf ("\\ word=%d\nchr:", wordsize);
 		for (i = 0; i < 8; i++) {
 			const ut8 *byte = buf + i;
 			char ch = IS_PRINTABLE (*byte)? *byte: '?';
@@ -632,19 +676,8 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 			r_core_cmd0 (core, vi);
 		}
 		r_cons_newline ();
-		{
-			ut8 *o = core->block;
-			int bs = core->blocksize;
-			core->block = buf;
-			int stride = r_config_get_i (core->config, "hex.stride");
-			r_config_set_i (core->config, "hex.stride", 1);
-			core->blocksize = sizeof (buf);
-			r_core_cmd_call (core, "pri1");
-			core->block = o;
-			r_config_set_i (core->config, "hex.stride", stride);
-			core->blocksize = bs;
-		}
-		r_cons_visual_flush ();
+		//r_cons_visual_flush ();
+		r_cons_flush ();
 
 		int ch = r_cons_readchar ();
 		if (ch == -1 || ch == 4) {
@@ -656,6 +689,30 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 		// input
 		r_cons_newline ();
 		switch (ch) {
+		case 'w':
+			wordsize += 1;
+			if (wordsize > 8) {
+				wordsize = 1;
+			}
+			break;
+		case 'W':
+			wordsize -= 1;
+			if (wordsize < 1) {
+				wordsize = 1;
+			}
+			break;
+		case 'e': // swap endian
+			{
+				ut8 a[8];
+				memcpy (a, buf, sizeof (a));
+				const int nbyte = x / 8;
+				const int last = R_MIN (nbyte + wordsize, 8);
+				int i;
+				for (i = nbyte; i < last; i++) {
+					buf[i] = a[last - 1 - i + nbyte];
+				}
+			}
+			break;
 		case 'Q':
 		case 'q':
 			if (analop.bytes) {
@@ -666,14 +723,31 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 				free (op_hex);
 			}
 			return false;
+		case '!':
+			{
+				const int nbyte = x / 8;
+				const int last = R_MIN (nbyte + wordsize, 8);
+				int i;
+				for (i = nbyte; i < last; i++) {
+					*(buf + i) = ~*(buf + i);
+				}
+			}
+			break;
 		case 'H':
 			{
 				const int y = R_MAX (x - 8, 0);
 				x = y - y % 8;
 			}
 			break;
+		case 'Z':
+			{
+				const int y = R_MAX (x - 8, 0);
+				x = y - y % 8;
+			}
+			break;
+			break;
 		case 'L':
-		case 9:
+		case 9: // TAB
 			{
 				const int y = R_MIN (x + 8, nbits - 8);
 				x = y - y % 8;
@@ -705,10 +779,25 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 			}
 			break;
 		case '>':
-			buf[x/8] = rotate_nibble (buf [(x / 8)], -1);
+			{
+				// buf[x / 8] = rotate_nibble (buf [(x / 8)], -1);
+				const int nbyte = x / 8;
+				int last = R_MIN (nbyte + wordsize, 8);
+				for (i = nbyte; i < last; i++) {
+					buf[i] = rotate_nibble (buf [i], -1);
+				}
+			}
 			break;
 		case '<':
-			buf[x / 8] = rotate_nibble (buf [(x / 8)], 1);
+			// buf[x / 8] = rotate_nibble (buf [(x / 8)], 1);
+			{
+				// buf[x / 8] = rotate_nibble (buf [(x / 8)], -1);
+				const int nbyte = x / 8;
+				int last = R_MIN (nbyte + wordsize, 8);
+				for (i = nbyte; i < last; i++) {
+					buf[i] = rotate_nibble (buf [i], 1);
+				}
+			}
 			break;
 		case 'i':
 			{
@@ -742,10 +831,23 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 		}
 		break;
 		case '+':
-			buf[(x/8)]++;
+			{
+				const int nbyte = x / 8;
+				int last = R_MIN (nbyte + wordsize, 8);
+				for (i = nbyte; i < last; i++) {
+					buf[i]++;
+				}
+			}
 			break;
 		case '-':
-			buf[(x / 8)]--;
+			//buf[(x / 8)]--;
+			{
+				const int nbyte = x / 8;
+				int last = R_MIN (nbyte + wordsize, 8);
+				for (i = nbyte; i < last; i++) {
+					buf[i]--;
+				}
+			}
 			break;
 		case 'h':
 			x = R_MAX (x - 1, 0);
@@ -756,6 +858,28 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 		case 'b':
 			bitsInLine = !bitsInLine;
 			break;
+		case 'y': // yank
+			{
+				const int nbyte = x / 8;
+				const int last = R_MIN (nbyte + wordsize, 8);
+				yankSize = last - nbyte + 1;
+				int i;
+				for (i = nbyte; i < last; i++) {
+					yankBuffer[i - nbyte] = buf[i];
+				}
+			}
+			break;
+		case 'Y': // paste
+			{
+				const int nbyte = x / 8;
+				const int last = R_MIN (nbyte + wordsize, yankSize + nbyte);
+				int i;
+				int j = 0;
+				for (i = nbyte; i < last; i++) {
+					buf[i] = yankBuffer[j++];
+				}
+			}
+			break;
 		case '?':
 			r_cons_clear00 ();
 			r_cons_printf (
@@ -763,13 +887,17 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 			" q     - quit the bit editor\n"
 			" R     - randomize color palette\n"
 			" b     - toggle bitsInLine\n"
+			" e     - toggle endian of the selected word\n"
 			" j/k   - toggle bit value (same as space key)\n"
 			" J/K   - next/prev instruction (so+1,so-1)\n"
 			" h/l   - select next/previous bit\n"
+			" w/W   - increment 2 or 4 the wordsize\n"
+			" y/Y   - yank/paste selected bits\n"
 			" +/-   - increment or decrement byte value\n"
 			" </>   - rotate left/right byte value\n"
 			" i     - insert numeric value of byte\n"
 			" =     - set cmd.vprompt command\n"
+			" !     - toggle all the bits\n"
 			" :     - run r2 command\n");
 			r_cons_flush ();
 			r_cons_any_key (NULL);
@@ -779,7 +907,7 @@ R_API bool r_core_visual_bit_editor(RCore *core) {
 			char cmd[1024];
 			r_cons_show_cursor (true);
 			r_cons_set_raw (0);
-			cmd[0]='\0';
+			cmd[0] = '\0';
 			r_line_set_prompt (":> ");
 			if (r_cons_fgets (cmd, sizeof (cmd), 0, NULL) < 0) {
 				cmd[0] = '\0';
@@ -1145,7 +1273,7 @@ R_API bool r_core_visual_hudclasses(RCore *core) {
 
 static bool hudstuff_append(RFlagItem *fi, void *user) {
 	RList *list = (RList *)user;
-	char *s = r_str_newf ("0x%08"PFMT64x"  %s", fi->offset, fi->name);
+	char *s = r_str_newf ("0x%08"PFMT64x"  %s", fi->addr, fi->name);
 	if (s) {
 		r_list_append (list, s);
 	}
@@ -1178,6 +1306,7 @@ R_API bool r_core_visual_hudstuff(RCore *core) {
 			*p = 0;
 		}
 		addr = r_num_get (NULL, res);
+		r_io_sundo_push (core->io, core->addr, r_print_get_cursor (core->print));
 		r_core_seek (core, addr, true);
 		free (res);
 	}
@@ -1366,7 +1495,7 @@ static void *show_class(RCore *core, int mode, int *idx, RBinClass *_c, const ch
 				}
 			}
 
-			char *mflags = r_core_bin_attr_tostring (m->attr, false);
+			char *mflags = r_core_bin_attr_tostring (core, m->attr, false);
 			if (show_color) {
 				if (r_str_startswith (name, _cname)) {
 					name += strlen (_cname);
@@ -1820,10 +1949,10 @@ static int flag_name_sort(const void *a, const void *b) {
 static int flag_offset_sort(const void *a, const void *b) {
 	const RFlagItem *fa = (const RFlagItem *)a;
 	const RFlagItem *fb = (const RFlagItem *)b;
-	if (fa->offset < fb->offset) {
+	if (fa->addr < fb->addr) {
 		return -1;
 	}
-	if (fa->offset > fb->offset) {
+	if (fa->addr > fb->addr) {
 		return 1;
 	}
 	return 0;
@@ -1834,7 +1963,7 @@ static void sort_flags(RList *l, int sort) {
 	case SORT_NAME:
 		r_list_sort (l, flag_name_sort);
 		break;
-	case SORT_OFFSET:
+	case SORT_ADDR:
 		r_list_sort (l, flag_offset_sort);
 		break;
 	case SORT_NONE:
@@ -1980,7 +2109,7 @@ R_API int r_core_visual_view_rop(RCore *core) {
 				if (!*cmd || *cmd == 'q') {
 					break;
 				}
-				ut64 oseek = core->offset;
+				ut64 oseek = core->addr;
 				r_core_seek (core, addr + delta, false);
 				r_core_cmd (core, cmd, 1);
 				r_core_seek (core, oseek, false);
@@ -2151,7 +2280,7 @@ R_API int r_core_visual_trackflags(RCore *core) { // "vbf"
 						r_cons_printf (Color_INVERT);
 					}
 					r_cons_printf (" %c  %03d 0x%08"PFMT64x" %4"PFMT64d" %s\n",
-						       cur?'>':' ', i, fi->offset, fi->size, fi->name);
+						       cur?'>':' ', i, fi->addr, fi->size, fi->name);
 					if (cur && hasColor) {
 						r_cons_printf (Color_RESET);
 					}
@@ -2232,7 +2361,7 @@ R_API int r_core_visual_trackflags(RCore *core) { // "vbf"
 			}
 			break;
 		case 'J': option += 10; break;
-		case 'o': sort = SORT_OFFSET; break;
+		case 'o': sort = SORT_ADDR; break;
 		case 'n': sort = SORT_NAME; break;
 		case 'j': option++; break;
 		case 'k':
@@ -3201,7 +3330,7 @@ static void function_rename(RCore *core, ut64 addr, const char *name) {
 
 static void variable_rename(RCore *core, ut64 addr, int vindex, const char *name) {
 	RAnalFunction* fcn = r_anal_get_fcn_in (core->anal, addr, R_ANAL_FCN_TYPE_NULL);
-	ut64 a_tmp = core->offset;
+	ut64 a_tmp = core->addr;
 	int i = 0;
 	RListIter *iter;
 	RList *list = r_anal_var_all_list (core->anal, fcn);
@@ -3239,8 +3368,8 @@ static void variable_set_type(RCore *core, ut64 addr, int vindex, const char *ty
 static ut64 var_functions_show(RCore *core, int idx, int show, int cols) {
 	int wdelta = (idx > 5)? idx - 5: 0;
 	char *var_functions;
-	ut64 seek = core->offset;
-	ut64 addr = core->offset;
+	ut64 seek = core->addr;
+	ut64 addr = core->addr;
 	RAnalFunction *fcn;
 	int window, i = 0, print_full_func;
 	RListIter *iter;
@@ -3348,7 +3477,7 @@ static ut64 var_variables_show(RCore* core, int idx, int *vindex, int show, int 
 						i == *vindex ? "* ":"  ",
 						var->delta < 0? "var": "arg",
 						var->type, var->name,
-						core->anal->reg->name[R_REG_NAME_BP],
+						r_reg_alias_getname (core->anal->reg, R_REG_ALIAS_BP),
 						(var->kind == 'v')?"-":"+",
 						var->delta);
 				break;
@@ -3357,7 +3486,7 @@ static ut64 var_variables_show(RCore* core, int idx, int *vindex, int show, int 
 						i == *vindex ? "* ":"  ",
 						var->delta < 0? "var": "arg",
 						var->type, var->name,
-						core->anal->reg->name[R_REG_NAME_SP],
+						r_reg_alias_getname (core->anal->reg, R_REG_ALIAS_SP),
 						(var->kind == 'v')?"-":"+",
 						var->delta + fcn->maxstack);
 				break;
@@ -3382,7 +3511,7 @@ static const char *printCmds[lastPrintMode] = {
 
 static void r_core_visual_anal_refresh_column(RCore *core, int colpos) {
 	const ut64 addr = (level != 0 && level != 1)
-		? core->offset
+		? core->addr
 		: var_functions_show (core, option, 0, colpos);
 	// RAnalFunction* fcn = r_anal_get_fcn_in(core->anal, addr, R_ANAL_FCN_TYPE_NULL);
 	int h, w = r_cons_get_size (&h);
@@ -3440,7 +3569,7 @@ static ut64 r_core_visual_anal_refresh(RCore *core) {
 	RStrBuf *buf;
 	bool color = r_config_get_i (core->config, "scr.color");
 	int h, cols = r_cons_get_size (&h);
-	addr = core->offset;
+	addr = core->addr;
 	cols -= 50;
 	int maxcols = 60 + coldelta;
 	if (cols > maxcols) {
@@ -3581,7 +3710,7 @@ R_API void r_core_visual_debugtraces(RCore *core, const char *input) {
 		switch (ch) {
 		case 'Q': // tab
 			{
-				ut64 oseek = core->offset;
+				ut64 oseek = core->addr;
 				core->vmode = false;
 				r_core_seek (core, trace_addr, true);
 				r_core_visual (core, "");
@@ -3656,7 +3785,7 @@ R_API void r_core_visual_anal(RCore *core, const char *input) {
 
 	RConsEvent olde = core->cons->event_resize;
 	void *olde_user = core->cons->event_data;
-	ut64 addr = core->offset;
+	ut64 addr = core->addr;
 
 	core->cons->event_resize = NULL; // avoid running old event with new data
 	core->cons->event_data = core;
@@ -3714,7 +3843,7 @@ R_API void r_core_visual_anal(RCore *core, const char *input) {
 			break;
 		case ':':
 			{
-				ut64 orig = core->offset;
+				ut64 orig = core->addr;
 				r_core_seek (core, addr, false);
 				while (r_core_visual_prompt (core));
 				r_core_seek (core, orig, false);
@@ -3749,7 +3878,7 @@ R_API void r_core_visual_anal(RCore *core, const char *input) {
 			break;
 		case 'r':
 			{
-				RAnalFunction *f = r_anal_get_fcn_in (core->anal, core->offset, 0);
+				RAnalFunction *f = r_anal_get_fcn_in (core->anal, core->addr, 0);
 				if (!f) {
 					r_cons_any_key ("No function found in the current offset");
 					break;
@@ -3824,7 +3953,7 @@ R_API void r_core_visual_anal(RCore *core, const char *input) {
 			break;
 		case 's': // "Vvs"
 			{
-				RAnalFunction *f = r_anal_get_fcn_in (core->anal, core->offset, 0);
+				RAnalFunction *f = r_anal_get_fcn_in (core->anal, core->addr, 0);
 				if (f) {
 					r_core_cmdf (core, "afs!@0x%08"PFMT64x, addr);
 				} else {
@@ -3846,7 +3975,7 @@ R_API void r_core_visual_anal(RCore *core, const char *input) {
 				RListIter *iter;
 				RAnalFunction *fcn;
 				r_list_foreach (core->anal->fcns, iter, fcn) {
-					if (fcn->addr == core->offset) {
+					if (fcn->addr == core->addr) {
 						option = n;
 						break;
 					}
@@ -3930,7 +4059,7 @@ R_API void r_core_visual_anal(RCore *core, const char *input) {
 			RAnalFunction *fcn;
 			int i = 0;
 			r_list_foreach (core->anal->fcns, iter, fcn) {
-				if (core->offset == fcn->addr) {
+				if (core->addr == fcn->addr) {
 					option = i;
 				}
 				i++;
@@ -3983,13 +4112,13 @@ struct seek_flag_offset_t {
 static bool seek_flag_offset(RFlagItem *fi, void *user) {
 	struct seek_flag_offset_t *u = (struct seek_flag_offset_t *)user;
 	if (u->is_next) {
-		if (fi->offset < *u->next && fi->offset > u->offset) {
-			*u->next = fi->offset;
+		if (fi->addr < *u->next && fi->addr > u->offset) {
+			*u->next = fi->addr;
 			u->found = true;
 		}
 	} else {
-		if (fi->offset >= *u->next && fi->offset <  u->offset) {
-			*u->next = fi->offset;
+		if (fi->addr >= *u->next && fi->addr <  u->offset) {
+			*u->next = fi->addr;
 			u->found = true;
 		}
 	}
@@ -4002,8 +4131,8 @@ R_API void r_core_seek_next(RCore *core, const char *type) {
 	bool found = false;
 	if (strstr (type, "opc")) {
 		RAnalOp aop;
-		if (r_anal_op (core->anal, &aop, core->offset, core->block, core->blocksize, R_ARCH_OP_MASK_BASIC)) {
-			next = core->offset + aop.size;
+		if (r_anal_op (core->anal, &aop, core->addr, core->block, core->blocksize, R_ARCH_OP_MASK_BASIC)) {
+			next = core->addr + aop.size;
 			found = true;
 		} else {
 			R_LOG_ERROR ("Invalid opcode");
@@ -4011,18 +4140,18 @@ R_API void r_core_seek_next(RCore *core, const char *type) {
 	} else if (strstr (type, "fun")) {
 		RAnalFunction *fcni;
 		r_list_foreach (core->anal->fcns, iter, fcni) {
-			if (fcni->addr < next && fcni->addr > core->offset) {
+			if (fcni->addr < next && fcni->addr > core->addr) {
 				next = fcni->addr;
 				found = true;
 			}
 		}
 	} else if (strstr (type, "hit")) {
 		const char *pfx = r_config_get (core->config, "search.prefix");
-		struct seek_flag_offset_t u = { .offset = core->offset, .next = &next, .is_next = true, .found = false };
+		struct seek_flag_offset_t u = { .offset = core->addr, .next = &next, .is_next = true, .found = false };
 		r_flag_foreach_prefix (core->flags, pfx, -1, seek_flag_offset, &u);
 		found = u.found;
 	} else { // flags
-		struct seek_flag_offset_t u = { .offset = core->offset, .next = &next, .is_next = true, .found = false };
+		struct seek_flag_offset_t u = { .offset = core->addr, .next = &next, .is_next = true, .found = false };
 		r_flag_foreach (core->flags, seek_flag_offset, &u);
 		found = u.found;
 	}
@@ -4040,18 +4169,18 @@ R_API void r_core_seek_previous(RCore *core, const char *type) {
 	} else if (strstr (type, "fun")) {
 		RAnalFunction *fcni;
 		r_list_foreach (core->anal->fcns, iter, fcni) {
-			if (fcni->addr > next && fcni->addr < core->offset) {
+			if (fcni->addr > next && fcni->addr < core->addr) {
 				next = fcni->addr;
 				found = true;
 			}
 		}
 	} else if (strstr (type, "hit")) {
 		const char *pfx = r_config_get (core->config, "search.prefix");
-		struct seek_flag_offset_t u = { .offset = core->offset, .next = &next, .is_next = false, .found = false };
+		struct seek_flag_offset_t u = { .offset = core->addr, .next = &next, .is_next = false, .found = false };
 		r_flag_foreach_prefix (core->flags, pfx, -1, seek_flag_offset, &u);
 		found = u.found;
 	} else { // flags
-		struct seek_flag_offset_t u = { .offset = core->offset, .next = &next, .is_next = false, .found = false };
+		struct seek_flag_offset_t u = { .offset = core->addr, .next = &next, .is_next = false, .found = false };
 		r_flag_foreach (core->flags, seek_flag_offset, &u);
 		found = u.found;
 	}
@@ -4098,7 +4227,7 @@ static void handleHints(RCore *core) {
 				r_str_trim (arg);
 				int bits = atoi (arg);
 				if (bits == 8 || bits == 16 || bits == 32 || bits == 64) {
-					r_anal_hint_set_bits (core->anal, core->offset, bits);
+					r_anal_hint_set_bits (core->anal, core->addr, bits);
 				}
 			}
 			break;
@@ -4111,7 +4240,7 @@ static void handleHints(RCore *core) {
 R_API void r_core_visual_define(RCore *core, const char *args, int distance) {
 	RCoreVisual *v = &core->visual;
 	int plen = core->blocksize;
-	ut64 off = core->offset;
+	ut64 off = core->addr;
 	int i, h = 0, n, ch, ntotal = 0;
 	ut8 *p = core->block;
 	int rep = -1;
@@ -4285,7 +4414,7 @@ onemoretime:
 			RAnalOp *op = r_core_anal_op (core, off, R_ARCH_OP_MASK_BASIC);
 			if (op) {
 				if (op->jump != UT64_MAX) {
-					RFlagItem *item = r_flag_get_i (core->flags, op->jump);
+					RFlagItem *item = r_flag_get_in (core->flags, op->jump);
 					if (item) {
 						const char *ptr = r_str_lchr (item->name, '.');
 						if (ptr) {
@@ -4318,7 +4447,7 @@ onemoretime:
 		}
 		// TODO: get the aligned instruction even if the cursor is in the middle of it.
 		int rc = r_anal_op (core->anal, &op, off,
-			core->block + off - core->offset, 32, R_ARCH_OP_MASK_BASIC);
+			core->block + off - core->addr, 32, R_ARCH_OP_MASK_BASIC);
 		if (rc < 1) {
 			R_LOG_ERROR ("analyzing opcode at 0x%08"PFMT64x, off);
 		} else {
@@ -4334,7 +4463,7 @@ onemoretime:
 				}
 			} else if (tgt_addr != UT64_MAX) {
 				RAnalFunction *fcn = r_anal_get_function_at (core->anal, tgt_addr);
-				RFlagItem *f = r_flag_get_i (core->flags, tgt_addr);
+				RFlagItem *f = r_flag_get_in (core->flags, tgt_addr);
 				if (fcn) {
 					q = r_str_newf ("?i Rename function %s to;afn `yp` 0x%"PFMT64x,
 						fcn->name, tgt_addr);
@@ -4360,14 +4489,14 @@ onemoretime:
 	}
 	case 'C':
 		{
-			RFlagItem *item = r_flag_get_i (core->flags, off);
+			RFlagItem *item = r_flag_get_in (core->flags, off);
 			if (item) {
 				char cmd[128];
 				r_cons_show_cursor (true);
 				r_cons_flush ();
 				r_line_set_prompt ("color: ");
 				if (r_cons_fgets (cmd, sizeof (cmd), 0, NULL) > 0) {
-					r_flag_item_set_color (item, cmd);
+					r_flag_item_set_color (core->flags, item, cmd);
 					r_cons_set_raw (1);
 					r_cons_show_cursor (false);
 				}
@@ -4379,7 +4508,7 @@ onemoretime:
 		break;
 	case '$':
 		{
-			RFlagItem *item = r_flag_get_i (core->flags, off);
+			RFlagItem *item = r_flag_get_in (core->flags, off);
 			if (item) {
 				char cmd[128];
 				r_cons_printf ("Current flag size is: %" PFMT64d "\n", item->size);
@@ -4402,7 +4531,7 @@ onemoretime:
 		{
 		RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, off, 0);
 		if (!fcn) {
-			fcn = r_anal_get_fcn_in (core->anal, core->offset, 0);
+			fcn = r_anal_get_fcn_in (core->anal, core->addr, 0);
 		}
 		if (fcn) {
 			RAnalOp op;
@@ -4431,7 +4560,7 @@ onemoretime:
 		break;
 	case 'r': // "Vdr"
 		{
-			RAnalFunction *f = r_anal_get_fcn_in (core->anal, core->offset, 0);
+			RAnalFunction *f = r_anal_get_fcn_in (core->anal, core->addr, 0);
 			if (f) {
 				r_core_cmdf (core, "cls;pd 10 @ 0x%08"PFMT64x, off);
 				r_core_cmdf (core, "?i new function name;afn `yp` @ 0x%08"PFMT64x, off);
@@ -4555,9 +4684,9 @@ onemoretime:
 		break;
 	case 'f':
 		{
-			RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset, 0);
+			RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->addr, 0);
 			if (fcn) {
-				r_anal_function_resize (fcn, core->offset - fcn->addr);
+				r_anal_function_resize (fcn, core->addr - fcn->addr);
 			}
 			r_cons_break_push (NULL, NULL);
 			r_core_cmdf_at (core, off, "af");
@@ -4719,12 +4848,12 @@ R_API void r_core_visual_colors(RCore *core) {
 #define CASE_RGB(x,X,y) \
 	case x:if ((y) > 0x00) { (y)--; } break;\
 	case X:if ((y) < 0xff) { (y)++; } break;
-		CASE_RGB ('R','r',rcolor.r);
-		CASE_RGB ('G','g',rcolor.g);
-		CASE_RGB ('B','b',rcolor.b);
-		CASE_RGB ('E','e',rcolor.r2);
-		CASE_RGB ('F','f',rcolor.g2);
-		CASE_RGB ('V','v',rcolor.b2);
+		CASE_RGB ('R', 'r', rcolor.r);
+		CASE_RGB ('G', 'g', rcolor.g);
+		CASE_RGB ('B', 'b', rcolor.b);
+		CASE_RGB ('E', 'e', rcolor.r2);
+		CASE_RGB ('F', 'f', rcolor.g2);
+		CASE_RGB ('V', 'v', rcolor.b2);
 		case 'Q':
 		case 'q':
 			free (res);

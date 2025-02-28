@@ -814,6 +814,7 @@ static ut8 read_module_public_functions(RFlirt *f, RFlirtModule *module, ut8 *fl
 	ut8 current_byte;
 
 	module->public_functions = r_list_new ();
+	RFlirtFunction *function = NULL;
 
 	do {
 		if (f->version >= 9) {   // seems like version 9 introduced some larger offsets
@@ -827,7 +828,7 @@ static ut8 read_module_public_functions(RFlirt *f, RFlirtModule *module, ut8 *fl
 				goto beach;
 			}
 		}
-		RFlirtFunction *function = R_NEW0 (RFlirtFunction);
+		function = R_NEW0 (RFlirtFunction);
 		function->offset = offset;
 
 		current_byte = read_byte (f);
@@ -849,7 +850,6 @@ static ut8 read_module_public_functions(RFlirt *f, RFlirtModule *module, ut8 *fl
 #endif
 			current_byte = read_byte (f);
 			if (f->buf_eof || f->buf_err) {
-				free (function);
 				goto beach;
 			}
 		}
@@ -858,7 +858,6 @@ static ut8 read_module_public_functions(RFlirt *f, RFlirtModule *module, ut8 *fl
 			function->name[i] = current_byte;
 			current_byte = read_byte (f);
 			if (f->buf_eof || f->buf_err) {
-				free (function);
 				goto beach;
 			}
 		}
@@ -879,6 +878,7 @@ static ut8 read_module_public_functions(RFlirt *f, RFlirtModule *module, ut8 *fl
 	return true;
 
 beach:
+	free (function);
 	return false;
 }
 
@@ -1349,6 +1349,7 @@ beach:
 
 // if buf is a flirt signature, returns signature version, or zero
 R_API int r_sign_is_flirt(RBuffer *buf) {
+	R_RETURN_VAL_IF_FAIL (buf, 0);
 	int ret = 0;
 	idasig_v5_t *header = R_NEW0 (idasig_v5_t);
 	if (!header) {
@@ -1387,7 +1388,7 @@ static inline void flirt_free(RFlirt *f) {
 
 // dump a flirt signature content on screen
 R_API void r_sign_flirt_dump(const RAnal *anal, const char *flirt_file) {
-	RBuffer *flirt_buf = r_buf_new_slurp (flirt_file);
+	RBuffer *flirt_buf = r_buf_new_from_file (flirt_file);
 	if (!flirt_buf) {
 		R_LOG_ERROR ("Can't slurp %s", flirt_file);
 		return;
@@ -1405,7 +1406,7 @@ R_API void r_sign_flirt_dump(const RAnal *anal, const char *flirt_file) {
 
 // parses a flirt signature file and scan the currently opened file with it
 R_API void r_sign_flirt_scan(RAnal *anal, const char *flirt_file) {
-	RBuffer *flirt_buf = r_buf_new_slurp (flirt_file);
+	RBuffer *flirt_buf = r_buf_new_from_file (flirt_file);
 	if (!flirt_buf) {
 		R_LOG_ERROR ("Can't slurp %s", flirt_file);
 		return;

@@ -1,15 +1,8 @@
-/* radare - LGPL - Copyright 2012-2021 - pancake */
+/* radare - LGPL - Copyright 2012-2024 - pancake */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <r_lib.h>
-#include <r_util.h>
-#include <r_flag.h>
-#include <r_anal.h>
-#include <r_parse.h>
+#include <r_asm.h>
 
-static int replace(int argc, const char *argv[], char *newstr) {
+static char *replace(int argc, const char *argv[]) {
 	int i, j, k;
 	struct {
 		const char *op;
@@ -187,32 +180,32 @@ static int replace(int argc, const char *argv[], char *newstr) {
 		{ "mul-double", "1 = 2 * 3" },
 		{ "move-wide", "1 = 2" },
 		{ "move-wide/16", "1 = 2" },
+		{ "return-void", "return" },
 		{ "return-wide", "return (wide) 1" },
 		{ "return-object", "return (object) 1" },
 		// { "sget", "1 = 2[3]" },
 		{ NULL }
 	};
 
+	RStrBuf *sb = r_strbuf_new ("");
 	for (i = 0; ops[i].op; i++) {
 		if (!strcmp (ops[i].op, argv[0])) {
-			if (newstr) {
-				for (j = k = 0; ops[i].str[j] != '\0'; j++, k++) {
-					if (ops[i].str[j] >= '1' && ops[i].str[j] <= '9') {
-						const char *w = argv[ops[i].str[j] - '0'];
-						if (w) {
-							strcpy (newstr + k, w);
-							k += strlen (w) - 1;
-						}
-					} else {
-						newstr[k] = ops[i].str[j];
+			for (j = k = 0; ops[i].str[j] != '\0'; j++, k++) {
+				if (ops[i].str[j] >= '1' && ops[i].str[j] <= '9') {
+					const char *w = argv[ops[i].str[j] - '0'];
+					if (w) {
+						r_strbuf_append (sb, w);
 					}
+				} else {
+					char ch = ops[i].str[j];
+					r_strbuf_append_n (sb, &ch, 1);
 				}
-				newstr[k] = '\0';
 			}
-			return true;
+			return r_strbuf_drain (sb);
 		}
 	}
-
+	r_strbuf_free (sb);
+#if 0
 	/* TODO: this is slow */
 	if (newstr) {
 		newstr[0] = '\0';
@@ -221,11 +214,38 @@ static int replace(int argc, const char *argv[], char *newstr) {
 			strcat (newstr, (i == 0 || i== argc - 1)?" ":", ");
 		}
 	}
-
-	return false;
+#endif
+	return NULL;
 }
 
-static int parse(RParse *p, const char *data, char *str) {
+static char *patch(RAsmPluginSession *aps, RAnalOp *aop, const char *op) {
+	const char *cmd = NULL;
+	if (!strcmp (op, "nop")) {
+		cmd = "wx 0000";
+	} else if (!strcmp (op, "ret2")) {
+		cmd = "wx 12200f00"; // mov v0, 2;ret v0
+	} else if (!strcmp (op, "jinf")) {
+		cmd = "wx 2800";
+	} else if (!strcmp (op, "ret1")) {
+		cmd = "wx 12100f00"; // mov v0, 1;ret v0
+	} else if (!strcmp (op, "ret0")) {
+		cmd = "wx 12000f00"; // mov v0, 0;ret v0
+	}
+	if (cmd) {
+		return strdup (cmd);
+	}
+	return NULL;
+}
+
+#define REPLACE(x,y) do { \
+		int snprintf_len1_ = snprintf (a, 32, x, w1, w1); \
+		int snprintf_len2_ = snprintf (b, 32, y, w1); \
+		if (snprintf_len1_ < 32 && snprintf_len2_ < 32) { \
+			p = r_str_replace (p, a, b, 0); \
+		} \
+	} while (0)
+
+static char *parse(RAsmPluginSession *aps, const char *data) {
 	int i, len = strlen (data);
 	char *buf, *ptr, *optr, *ptr2;
 	char w0[64];
@@ -238,8 +258,7 @@ static int parse(RParse *p, const char *data, char *str) {
 	||  !strcmp (data, "???")
 	||  !strcmp (data, "nop")
 	||  !strcmp (data, "DEPRECATED")) {
-		str[0] = 0;
-		return true;
+		return strdup ("");
 	}
 
 	// malloc can be slow here :?
@@ -250,21 +269,20 @@ static int parse(RParse *p, const char *data, char *str) {
 
 	r_str_trim (buf);
 
+	char *str = NULL;
 	if (*buf) {
-		w0[0]='\0';
-		w1[0]='\0';
-		w2[0]='\0';
-		w3[0]='\0';
-		w4[0]='\0';
+		w0[0] = '\0';
+		w1[0] = '\0';
+		w2[0] = '\0';
+		w3[0] = '\0';
+		w4[0] = '\0';
 		ptr = strchr (buf, ' ');
 		if (!ptr) {
 			ptr = strchr (buf, '\t');
 		}
 		if (ptr) {
 			*ptr = '\0';
-			for (ptr++; *ptr == ' '; ptr++) {
-				;
-			}
+			ptr = (char *)r_str_trim_head_ro (ptr + 1);
 			strncpy (w0, buf, sizeof (w0) - 1);
 			w0[sizeof (w0)-1] = '\0';
 			strncpy (w1, ptr, sizeof (w1) - 1);
@@ -320,54 +338,49 @@ static int parse(RParse *p, const char *data, char *str) {
 					nw++;
 				}
 			}
-			replace (nw, wa, str);
-{
-	char *p = strdup (str);
-	p = r_str_replace (p, "+ -", "- ", 0);
+			str = replace (nw, wa);
+			if (str) {
+				char *p = strdup (str);
+				p = r_str_replace (p, "+ -", "- ", 0);
 #if EXPERIMENTAL_ZERO
-	p = r_str_replace (p, "zero", "0", 0);
-	if (!memcmp (p, "0 = ", 4)) *p = 0; // nop
+				p = r_str_replace (p, "zero", "0", 0);
+				if (!memcmp (p, "0 = ", 4)) *p = 0; // nop
 #endif
-	if (!strcmp (w1, w2)) {
-		char a[32], b[32];
-#define REPLACE(x,y) do { \
-		int snprintf_len1_ = snprintf (a, 32, x, w1, w1); \
-		int snprintf_len2_ = snprintf (b, 32, y, w1); \
-		if (snprintf_len1_ < 32 && snprintf_len2_ < 32) { \
-			p = r_str_replace (p, a, b, 0); \
-		} \
-	} while (0)
-
-		// TODO: optimize
-		REPLACE ("%s = %s +", "%s +=");
-		REPLACE ("%s = %s -", "%s -=");
-		REPLACE ("%s = %s &", "%s &=");
-		REPLACE ("%s = %s |", "%s |=");
-		REPLACE ("%s = %s ^", "%s ^=");
-		REPLACE ("%s = %s >>", "%s >>=");
-		REPLACE ("%s = %s <<", "%s <<=");
-	}
-	strcpy (str, p);
-	free (p);
-}
+				if (!strcmp (w1, w2)) {
+					char a[32], b[32];
+					// TODO: optimize
+					REPLACE ("%s = %s +", "%s +=");
+					REPLACE ("%s = %s -", "%s -=");
+					REPLACE ("%s = %s &", "%s &=");
+					REPLACE ("%s = %s |", "%s |=");
+					REPLACE ("%s = %s ^", "%s ^=");
+					REPLACE ("%s = %s >>", "%s >>=");
+					REPLACE ("%s = %s <<", "%s <<=");
+				}
+				free (str);
+				str = p;
+			}
 		}
 	}
 	free (buf);
-	return true;
+	return str;
 }
 
-RParsePlugin r_parse_plugin_dalvik_pseudo = {
-	.name = "dalvik.pseudo",
-	.desc = "DALVIK pseudo syntax",
-	.init = NULL,
-	.fini = NULL,
+RAsmPlugin r_asm_plugin_dalvik = {
+	.meta = {
+		.name = "dalvik",
+		.desc = "DALVIK pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.parse = parse,
+	.patch = patch
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_dalvik_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_dalvik,
 	.version = R2_VERSION
 };
 #endif

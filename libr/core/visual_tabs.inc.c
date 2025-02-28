@@ -61,7 +61,7 @@ static char *__core_visual_tab_string(RCore *core, const char *kolor) {
 static void visual_tabset(RCore *core, RCoreVisualTab *tab) {
 	R_RETURN_IF_FAIL (core && tab);
 
-	r_core_seek (core, tab->offset, true);
+	r_core_seek (core, tab->addr, true);
 	core->visual.printidx = tab->printidx;
 	core->print->cur_enabled = tab->cur_enabled;
 	core->print->cur = tab->cur;
@@ -72,9 +72,9 @@ static void visual_tabset(RCore *core, RCoreVisualTab *tab) {
 	core->visual.current3format = tab->current3format;
 	core->visual.current4format = tab->current4format;
 	core->visual.current5format = tab->current5format;
-	r_core_visual_applyDisMode (core, core->visual.disMode);
-	r_core_visual_applyHexMode (core, core->visual.hexMode);
-	r_config_set_i (core->config, "asm.offset", tab->asm_offset);
+	applyDisMode (core);
+	applyHexMode (core);
+	r_config_set_i (core->config, "asm.addr", tab->asm_addr);
 	r_config_set_i (core->config, "asm.instr", tab->asm_instr);
 	r_config_set_i (core->config, "asm.bytes", tab->asm_bytes);
 	r_config_set_i (core->config, "asm.indent", tab->asm_indent);
@@ -90,9 +90,9 @@ static void visual_tabset(RCore *core, RCoreVisualTab *tab) {
 static void visual_tabget(RCore *core, RCoreVisualTab *tab) {
 	R_RETURN_IF_FAIL (core && tab);
 
-	tab->offset = core->offset;
+	tab->addr = core->addr;
 	tab->printidx = core->visual.printidx;
-	tab->asm_offset = r_config_get_b (core->config, "asm.offset");
+	tab->asm_addr = r_config_get_b (core->config, "asm.addr");
 	tab->asm_instr = r_config_get_i (core->config, "asm.instr");
 	tab->asm_indent = r_config_get_i (core->config, "asm.indent");
 	tab->asm_bytes = r_config_get_b (core->config, "asm.bytes");

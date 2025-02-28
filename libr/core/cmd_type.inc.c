@@ -561,7 +561,7 @@ static void print_struct_union_in_c_format(Sdb *TDB, SdbForeachCallback filter, 
 				char *val = sdb_array_get (TDB, var2, 0, NULL);
 				if (val) {
 					char *arr = sdb_array_get (TDB, var2, 2, NULL);
-					int arrnum = atoi (arr);
+					int arrnum = arr? atoi (arr): 0;
 					free (arr);
 					if (multiline) {
 						r_cons_printf ("  %s", val);
@@ -936,6 +936,9 @@ beach:
 }
 
 R_API void r_core_link_stroff(RCore *core, RAnalFunction *fcn) {
+	if (!fcn) {
+		return;
+	}
 	RAnalBlock *bb;
 	RListIter *it;
 	RAnalOp aop = {0};
@@ -949,13 +952,8 @@ R_API void r_core_link_stroff(RCore *core, RAnalFunction *fcn) {
 	int iotrap = r_config_get_i (core->config, "esil.iotrap");
 	int stacksize = r_config_get_i (core->config, "esil.stack.depth");
 	unsigned int addrsize = r_config_get_i (core->config, "esil.addr.size");
-	const char *pc_name = r_reg_get_name (core->anal->reg, R_REG_NAME_PC);
-	const char *sp_name = r_reg_get_name (core->anal->reg, R_REG_NAME_SP);
-	RRegItem *pc = r_reg_get (core->anal->reg, pc_name, -1);
+	RRegItem *pc = r_reg_get (core->anal->reg, "PC", -1);
 
-	if (!fcn) {
-		return;
-	}
 	if (!(esil = r_esil_new (stacksize, iotrap, addrsize))) {
 		return;
 	}
@@ -972,11 +970,11 @@ R_API void r_core_link_stroff(RCore *core, RAnalFunction *fcn) {
 	}
 	r_reg_arena_push (core->anal->reg);
 	r_debug_reg_sync (core->dbg, R_REG_TYPE_ALL, true);
-	ut64 spval = r_reg_getv (esil->anal->reg, sp_name);
+	ut64 spval = r_reg_getv (esil->anal->reg, "SP");
 	if (spval) {
 		// reset stack pointer to initial value
-		RRegItem *sp = r_reg_get (esil->anal->reg, sp_name, -1);
-		ut64 curpc = r_reg_getv (esil->anal->reg, pc_name);
+		RRegItem *sp = r_reg_get (esil->anal->reg, "SP", -1);
+		ut64 curpc = r_reg_getv (esil->anal->reg, "PC");
 		int stacksz = r_core_get_stacksz (core, fcn->addr, curpc);
 		if (stacksz > 0) {
 			r_reg_arena_zero (esil->anal->reg); // clear prev reg values
@@ -989,7 +987,7 @@ R_API void r_core_link_stroff(RCore *core, RAnalFunction *fcn) {
 	}
 	r_config_set_b (core->config, "io.cache", true);
 	r_config_set_i (core->config, "dbg.follow", 0);
-	ut64 oldoff = core->offset;
+	ut64 oldoff = core->addr;
 	r_cons_break_push (NULL, NULL);
 	// TODO: The algorithm can be more accurate if blocks are followed by their jmp/fail, not just by address
 	r_list_sort (fcn->bbs, bb_cmpaddr);
@@ -1583,7 +1581,7 @@ static int cmd_type(void *data, const char *input) {
 		case '.': // "tx." type xrefs
 		case 'f': // "txf" type xrefs
 			{
-			ut64 addr = core->offset;
+			ut64 addr = core->addr;
 			if (input[2] == ' ') {
 				addr = r_num_math (core->num, input + 2);
 			}
@@ -1691,7 +1689,7 @@ static int cmd_type(void *data, const char *input) {
 		case ' ': {
 			char *type = strdup (input + 2);
 			char *ptr = strchr (type, '=');
-			ut64 addr = core->offset;
+			ut64 addr = core->addr;
 
 			if (ptr) {
 				*ptr++ = 0;
@@ -1708,7 +1706,7 @@ static int cmd_type(void *data, const char *input) {
 			char *tmp = sdb_get (TDB, type, 0);
 			if (R_STR_ISNOTEMPTY (tmp)) {
 				r_type_set_link (TDB, type, addr);
-				RList *fcns = r_anal_get_functions_in (core->anal, core->offset);
+				RList *fcns = r_anal_get_functions_in (core->anal, core->addr);
 				if (r_list_length (fcns) > 1) {
 					R_LOG_ERROR ("Multiple functions found in here");
 				} else if (r_list_length (fcns) == 1) {
@@ -1778,7 +1776,7 @@ static int cmd_type(void *data, const char *input) {
 			const char *type_name = r_str_trim_head_ro (input + 2);
 			char *fmt = r_type_format (TDB, type_name);
 			if (fmt && *fmt) {
-				ut64 val = core->offset;
+				ut64 val = core->addr;
 				r_core_cmdf (core, "pf %s @v:0x%08" PFMT64x, fmt, val);
 			} else {
 				r_core_cmd_help_match (core, help_msg_tp, "tpv");
@@ -1809,10 +1807,10 @@ static int cmd_type(void *data, const char *input) {
 				if (input[1] == 'x' && arg) { // "tpx"
 					r_core_cmdf (core, "pf %s @x:%s", fmt, arg);
 				} else {
-					ut64 addr = arg ? r_num_math (core->num, arg): core->offset;
+					ut64 addr = arg ? r_num_math (core->num, arg): core->addr;
 					ut64 original_addr = addr;
 					if (!addr && arg) {
-						RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset, -1);
+						RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->addr, -1);
 						if (fcn) {
 							RAnalVar *var = r_anal_function_get_var_byname (fcn, arg);
 							if (var) {

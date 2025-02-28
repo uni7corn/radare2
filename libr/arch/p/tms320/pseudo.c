@@ -1,9 +1,9 @@
-/* radare - LGPL - Copyright 2020 - pancake */
+/* radare - LGPL - Copyright 2020-2024 - pancake */
 
 #include <r_lib.h>
 #include <r_flag.h>
 #include <r_anal.h>
-#include <r_parse.h>
+#include <r_asm.h>
 
 // https://www.ti.com/lit/ug/spru732j/spru732j.pdf
 
@@ -137,13 +137,12 @@ static int replace(int argc, const char *argv[], char *newstr) {
 	return false;
 }
 
-static int parse(RParse *p, const char *data, char *str) {
-	if (!strncmp (data, "|| ", 3)) {
+static char *parse(RAsmPluginSession *aps, const char *data) {
+	if (r_str_startswith (data, "|| ")) {
 		data += 3;
 	}
 	if (R_STR_ISEMPTY (data)) {
-		*str = 0;
-		return false;
+		return NULL;
 	}
 
 	char *buf = strdup (data);
@@ -166,23 +165,29 @@ static int parse(RParse *p, const char *data, char *str) {
 			}
 		}
 	}
+	char *str = malloc (strlen (data) + 128);
+	strcpy (str, data);
 	replace (nw, wa, str);
 
 	free (buf);
 	r_list_free (list);
 
-	return true;
+	return str;
 }
 
-RParsePlugin r_parse_plugin_tms320_pseudo = {
-	.name = "tms320.pseudo",
-	.desc = "tms320 pseudo syntax",
+RAsmPlugin r_asm_plugin_tms320 = {
+	.meta = {
+		.name = "tms320",
+		.desc = "tms320 pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.parse = parse,
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_tms320_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_tms320,
 	.version = R2_VERSION};
 #endif

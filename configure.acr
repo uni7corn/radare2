@@ -1,5 +1,5 @@
 PKGNAME radare2
-VERSION 5.9.7
+VERSION 5.9.9
 CONTACT pancake ; pancake@nopcode.org
 
 DESCRIPTION The UNIX-like reverse engineering toolkit ;
@@ -18,8 +18,19 @@ CHKPRG! PATCH patch
 CHKPRG! AR ar
 CHKPRG GIT git
 CHKPRG GPERF gperf
+CHKLIB atomic
 CHKLIB magic
 CHKINC linux/can.h
+
+ARG_WITH USE_LIB_ATOMIC libatomic force to use libatomic ;
+IFAND HAVE_LIB_ATOMIC USE_LIB_ATOMIC {
+	USE_LIB_ATOMIC = 1 ;
+	LIBATOMIC = '-latomic' ;
+}{
+	USE_LIB_ATOMIC = 0 ;
+	LIBATOMIC = '' ;
+}
+
 ARG_WITH USE_MAGIC sysmagic force to use system's magic ;
 IFAND HAVE_LIB_MAGIC USE_MAGIC {
 	USE_LIB_MAGIC = 1 ;
@@ -36,6 +47,7 @@ ARG_DISABLE LOADLIBS loadlibs disable loading plugins ;
 
 ARG_ENABLE R_CRITICAL_ENABLED threadsafety enable mutexes in critical code paths ;
 
+ARG_WITHOUT WANT_QJS qjs build without the QuickJS runtime ;
 ARG_WITHOUT WANT_DYLINK dylink disable support for dynamic loading of plugins ;
 ARG_WITHOUT HAVE_FORK fork disable fork ;
 ARG_WITHOUT WANT_PTRACE_WRAP ptrace-wrap build ptrace-wrap support needed for the iaito debugger on Linux ;
@@ -127,8 +139,19 @@ CHKFNC c arc4random_uniform
 CHKFNC c explicit_bzero
 CHKFNC c explicit_memset
 CHKFNC c clock_nanosleep
+CHKFNC c __atomic_fetch_add_8
 CHKFNC c sigaction
 CHKFNC c clock_gettime
+
+IFNOT HAVE___ATOMIC_FETCH_ADD_8 {
+	IF HAVE_LIB_ATOMIC {
+		FORCE_LIB_ATOMIC = 1 ;
+		LIBATOMIC ?= '-latomic' ;
+	}{
+		FORCE_LIB_ATOMIC = 0 ;
+		LIBATOMIC ?= '' ;
+	}
+}
 
 IFNOT HAVE_CLOCK_GETTIME {
 	IF HAVE_DECL___GLIBC__ {
@@ -312,6 +335,7 @@ REPORT
 	HAVE_OPENSSL WANT_SSL_CRYPTO HAVE_PTRACE HOST LDFLAGS LIBVERSION PKGCONFIG PREFIX
 	R_CHECKS_LEVEL TARGET USERCC USEROSTYPE USE_CAPSTONE USE_LIB_MAGIC NEW_IO_CACHE USE_SQSH
 	USE_LIB_XXHASH USE_LIB_ZIP USE_PTRACE_WRAP USE_SYSLZ4 VERSION WANT_DYLINK USE_SMALLZ4
+	USE_LIB_ATOMIC HAVE___ATOMIC_FETCH_ADD_8 FORCE_LIB_ATOMIC WANT_QJS
 ;
 
 PKGCFG_DO pkgcfg/r_egg.pc r_egg r_asm r_syscall r_util r_reg r_flag r_cons ;

@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2024 - pancake */
+/* radare - LGPL - Copyright 2009-2025 - pancake */
 
 #ifndef R2_DEBUG_H
 #define R2_DEBUG_H
@@ -237,9 +237,8 @@ typedef struct r_debug_trace_t {
 	HtPP *ht; // use rbtree like the iocache?
 } RDebugTrace;
 
-// R2_590 rename to traceitem for consistency?
-#define r_debug_tracepoint_free(x) free((x))
-typedef struct r_debug_tracepoint_t {
+#define r_debug_tracepoint_item_free(x) free((x))
+typedef struct r_debug_tracepoint_item_t {
 	ut64 addr;
 	ut64 tags; // XXX
 	int tag; // XXX
@@ -253,7 +252,7 @@ typedef struct r_debug_tracepoint_t {
 	ut64 refaddr;
 	int direction
 #endif
-} RDebugTracepoint;
+} RDebugTracepointItem;
 
 typedef struct r_debug_t RDebug;
 
@@ -294,7 +293,7 @@ typedef struct r_debug_plugin_session_t RDebugPluginSession;
 typedef int (*RDebugCmdCb)(RDebug *dbg, const char *cmd);
 typedef struct r_debug_plugin_t {
 	RPluginMeta meta;
-	ut32 bits;
+	RSysBits bits;
 	const char *arch;
 	int canstep;
 	int keepio;
@@ -330,10 +329,10 @@ typedef struct r_debug_plugin_t {
 	RList *(*map_get)(RDebug *dbg);
 	RList *(*modules_get)(RDebug *dbg);
 	RDebugMap* (*map_alloc)(RDebug *dbg, ut64 addr, int size, bool thp);
-	int (*map_dealloc)(RDebug *dbg, ut64 addr, int size);
-	int (*map_protect)(RDebug *dbg, ut64 addr, int size, int perms);
+	bool (*map_dealloc)(RDebug *dbg, ut64 addr, int size);
+	bool (*map_protect)(RDebug *dbg, ut64 addr, int size, int perms);
 	bool (*init_debugger)(RDebug *dbg);
-	int (*drx)(RDebug *dbg, int n, ut64 addr, int size, int rwx, int g, int api_type);
+	bool (*drx)(RDebug *dbg, int n, ut64 addr, int size, int rwx, int g, int api_type);
 	RDebugDescPlugin desc;
 	RDebugCmdCb cmd;
 	// TODO: use RVec here
@@ -348,9 +347,9 @@ typedef struct r_debug_plugin_session_t {
 R_VEC_FORWARD_DECLARE (RVecDebugPluginSession);
 
 typedef struct r_debug_t {
-	// R2_590 use RArchConfig instead
+	// R2_600 use RArchConfig instead?
 	char *arch;
-	int bits; /// XXX: MUST SET ///
+	int bits; // only 16, 32, 64, .. not packed
 	int hitinfo;
 
 	int main_pid;
@@ -477,10 +476,10 @@ R_API int r_debug_cmd(RDebug *dbg, const char *s);
 /* continuations */
 R_API int r_debug_step(RDebug *dbg, int steps);
 R_API int r_debug_step_over(RDebug *dbg, int steps);
-R_API int r_debug_continue_until(RDebug *dbg, ut64 addr);
-R_API int r_debug_continue_until_nonblock(RDebug *dbg, ut64 addr);
+R_API bool r_debug_continue_until(RDebug *dbg, ut64 addr);
+R_API bool r_debug_continue_until_nonblock(RDebug *dbg, ut64 addr);
 R_API bool r_debug_continue_until_optype(RDebug *dbg, int type, bool over);
-R_API int r_debug_continue_until_nontraced(RDebug *dbg);
+R_API bool r_debug_continue_until_nontraced(RDebug *dbg);
 R_API int r_debug_continue_syscall(RDebug *dbg, int sc);
 R_API int r_debug_continue_syscalls(RDebug *dbg, int *sc, int n_sc);
 R_API int r_debug_continue(RDebug *dbg);
@@ -534,7 +533,7 @@ R_API bool r_debug_plugin_set_reg_profile(RDebug *dbg, const char *str);
 /* memory */
 R_API RList *r_debug_modules_list(RDebug*);
 R_API RDebugMap *r_debug_map_alloc(RDebug *dbg, ut64 addr, int size, bool thp);
-R_API int r_debug_map_dealloc(RDebug *dbg, RDebugMap *map);
+R_API bool r_debug_map_dealloc(RDebug *dbg, RDebugMap *map);
 R_API RList *r_debug_map_list_new(void);
 R_API RDebugMap *r_debug_map_get(RDebug *dbg, ut64 addr);
 R_API RDebugMap *r_debug_map_new(char *name, ut64 addr, ut64 addr_end, int perm, int user);
@@ -558,7 +557,7 @@ R_API bool r_debug_reg_sync(RDebug *dbg, int type, int write);
 R_API bool r_debug_reg_list(RDebug *dbg, int type, int size, PJ *pj, int rad, const char *use_color);
 R_API bool r_debug_reg_set(RDebug *dbg, const char *name, ut64 num);
 R_API ut64 r_debug_reg_get(RDebug *dbg, const char *name);
-R_API ut64 r_debug_reg_get_err(RDebug *dbg, const char *name, int *err, utX *value);
+R_API ut64 r_debug_reg_get_err(RDebug *dbg, const char *name, bool *err, utX *value);
 
 R_API bool r_debug_execute(RDebug *dbg, const ut8 *buf, int len, R_OUT ut64 *ret, bool restore, bool ignore_stack);
 R_API bool r_debug_map_sync(RDebug *dbg);
@@ -569,7 +568,7 @@ R_API bool r_debug_stop(RDebug *dbg);
 R_API RList *r_debug_frames(RDebug *dbg, ut64 at);
 
 R_API bool r_debug_is_dead(RDebug *dbg);
-R_API int r_debug_map_protect(RDebug *dbg, ut64 addr, int size, int perms);
+R_API bool r_debug_map_protect(RDebug *dbg, ut64 addr, int size, int perms);
 /* args XXX: weird food */
 R_API ut64 r_debug_arg_get(RDebug *dbg, const char *cc, int num);
 R_API bool r_debug_arg_set(RDebug *dbg, const char *cc, int num, ut64 value);
@@ -588,9 +587,9 @@ R_API void r_debug_trace_reset(RDebug *dbg);
 R_API bool r_debug_trace_pc(RDebug *dbg, ut64 pc);
 R_API void r_debug_trace_op(RDebug *dbg, RAnalOp *op);
 R_API void r_debug_trace_at(RDebug *dbg, const char *str);
-R_API RDebugTracepoint *r_debug_trace_get(RDebug *dbg, ut64 addr);
-R_API void r_debug_trace_list(RDebug *dbg, int mode, ut64 offset);
-R_API RDebugTracepoint *r_debug_trace_add(RDebug *dbg, ut64 addr, int size);
+R_API RDebugTracepointItem *r_debug_trace_get(RDebug *dbg, ut64 addr);
+R_API void r_debug_trace_list(RDebug *dbg, int mode, ut64 offset, RTable *t);
+R_API RDebugTracepointItem *r_debug_trace_add(RDebug *dbg, ut64 addr, int size);
 R_API RDebugTrace *r_debug_trace_new(void);
 R_API void r_debug_trace_free(RDebugTrace *dbg);
 R_API int r_debug_trace_tag(RDebug *dbg, int tag);
@@ -600,7 +599,7 @@ R_API int r_debug_child_clone(RDebug *dbg);
 R_API void r_debug_drx_list(RDebug *dbg);
 R_API bool r_debug_drx_set(RDebug *dbg, int idx, ut64 addr, int len, int rwx, int g);
 R_API int r_debug_drx_get(RDebug *dbg, ut64 addr);
-R_API int r_debug_drx_unset(RDebug *dbg, int idx);
+R_API bool r_debug_drx_unset(RDebug *dbg, int idx);
 
 /* esil */
 R_API bool r_debug_esil_stepi(RDebug *dbg);

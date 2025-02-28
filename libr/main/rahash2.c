@@ -147,7 +147,11 @@ static void do_hash_print(RHash *ctx, RahashOptions *ro, ut64 hash, int dlen, PJ
 	case 'j':
 		pj_o (pj);
 		pj_ks (pj, "name", hname);
-		do_hash_hexprint (c, dlen, ule, pj, rad);
+		if (hash & R_HASH_SSDEEP) {
+			pj_ks (pj, "hash", (const char *)c);
+		} else {
+			do_hash_hexprint (c, dlen, ule, pj, rad);
+		}
 		pj_end (pj);
 		break;
 	case 'J':
@@ -348,7 +352,7 @@ static int do_help(int line) {
 
 static void algolist(int mode) {
 	RCrypto *cry = r_crypto_new ();
-	r_crypto_list (cry, NULL, mode | (int)R_CRYPTO_TYPE_ALL << 8);
+	r_crypto_list (cry, NULL, mode, (int)R_CRYPTO_TYPE_ALL);
 	r_crypto_free (cry);
 }
 
@@ -403,7 +407,7 @@ static int encrypt_or_decrypt(RahashOptions *ro, const char *hashstr, int hashst
 	const int direction = ro->direction;
 	const char *algo = ro->algorithm;
 	// TODO: generalise this for all non key encoding/decoding.
-	bool no_key_mode = !strcmp ("base64", algo) || !strcmp ("base91", algo) || !strcmp ("punycode", algo);
+	bool no_key_mode = !strcmp ("base64", algo) || !strcmp ("base91", algo) || !strcmp ("punycode", algo) || !strcmp ("bech32", algo);
 	if (no_key_mode || ro->s.len > 0) {
 		RCrypto *cry = r_crypto_new ();
 		RCryptoJob *cj = r_crypto_use (cry, algo);
@@ -444,7 +448,7 @@ static int encrypt_or_decrypt_file(RahashOptions *ro, const char *filename, cons
 	const int direction = ro->direction;
 	const char *algo = ro->algorithm;
 	// TODO: generalise this for all non key encoding/decoding. aka crypto vs encoder plugins after moving all those hash algos to crypto plugins
-	bool no_key_mode = !strcmp ("base64", algo) || !strcmp ("base91", algo) || !strcmp ("punycode", algo);
+	bool no_key_mode = !strcmp ("base64", algo) || !strcmp ("base91", algo) || !strcmp ("punycode", algo) || !strcmp ("bech32", algo);
 	if (no_key_mode || ro->s.len > 0) {
 		RCrypto *cry = r_crypto_new ();
 		RCryptoJob *cj = r_crypto_use (cry, algo);

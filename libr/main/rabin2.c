@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2024 - pancake */
+/* radare - LGPL - Copyright 2009-2025 - pancake */
 
 #include <r_core.h>
 #include "../../libr/bin/format/pdb/pdb_downloader.h"
@@ -29,7 +29,7 @@ static int rabin_show_help(int v) {
 		" -f [str]        select sub-bin named str\n"
 		" -F [binfmt]     force to use that bin plugin (ignore header check)\n"
 		" -g              same as -SMZIHVResizcld -SS -SSS -ee (show all info)\n"
-		" -G [addr]       load address . offset to header\n"
+		" -G [addr]       load address . address to header\n"
 		" -h              this help message\n"
 		" -H              header fields\n"
 		" -i              imports (symbols imported from libraries)\n"
@@ -49,7 +49,7 @@ static int rabin_show_help(int v) {
 		" -P              show debug/pdb information\n"
 		" -PP             download pdb file for binary\n"
 		" -q              be quiet, just show fewer data\n"
-		" -qq             show less info (no offset/size for -z for ex.)\n"
+		" -qq             show less info (no addr/size for -z for ex.)\n"
 		" -Q              show load address used by dlopen (non-aslr libs)\n"
 		" -r              radare output\n"
 		" -R              relocations\n"
@@ -472,7 +472,7 @@ error:
 
 static int rabin_show_srcline(RBin *bin, ut64 at) {
 	char *srcline;
-	if (at != UT64_MAX && (srcline = r_bin_addr2text (bin, at, true))) {
+	if (at != UT64_MAX && (srcline = r_bin_addrline_tostring (bin, at, 1))) {
 		printf ("%s\n", srcline);
 		free (srcline);
 		return true;
@@ -853,6 +853,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 			break;
 		case 'h':
 			r_core_fini (&core);
+			free (create);
 			free (state.stdin_buf);
 			return rabin_show_help (1);
 		default:
@@ -1159,7 +1160,7 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 }
 	core.bin = bin;
 	bin->cb_printf = r_cons_printf;
-	filter.offset = at;
+	filter.addr = at;
 	filter.name = name;
 	r_cons_new ()->context->is_interactive = false;
 
@@ -1170,9 +1171,9 @@ R_API int r_main_rabin2(int argc, const char **argv) {
 	if (action & R_BIN_REQ_LISTARCHS || ((arch || bits || arch_name) &&
 		!r_bin_select (bin, arch, bits, arch_name))) {
 		if (rad == R_MODE_SIMPLEST || rad == R_MODE_SIMPLE) {
-			r_bin_list_archs (bin, pj, 'q');
+			r_bin_list_archs (bin, pj, NULL, 'q');
 		} else {
-			r_bin_list_archs (bin, pj, (rad == R_MODE_JSON)? 'j': 1);
+			r_bin_list_archs (bin, pj, NULL, (rad == R_MODE_JSON)? 'j': 1);
 		}
 		free (arch_name);
 	}

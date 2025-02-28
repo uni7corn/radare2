@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2014-2023 - pancake, condret */
+/* radare - LGPL - Copyright 2014-2025 - pancake, condret */
 
 // TODO: esil_handler.c -> esil_syscall ? set_interrupts ? set_syscalls?
 #define R_LOG_ORIGIN "esil.syscall"
@@ -21,28 +21,26 @@ static REsilHandler *_get_syscall(REsil *esil, ut32 sysc_num) {
 	return sysc_num ? (REsilHandler *)dict_getu (esil->syscalls, sysc_num) : esil->sysc0;
 }
 
-R_API void r_esil_handlers_init(REsil *esil) {
-	R_RETURN_IF_FAIL (esil);
+R_API bool r_esil_handlers_init(REsil *esil) {
+	R_RETURN_VAL_IF_FAIL (esil, false);
 	esil->interrupts = dict_new (sizeof (ut32), free);
 	if (!esil->interrupts) {
-		return;
+		return false;
 	}
 	esil->syscalls = dict_new (sizeof (ut32), free);
 	if (!esil->syscalls) {
 		dict_free (esil->interrupts);
-		return;
+		return false;
 	}
 	esil->intr0 = NULL;
 	esil->sysc0 = NULL;
+	return true;
 }
 
 // does this need to be an API function?
 R_API REsilHandler *r_esil_handler_new(REsilHandlerCB cb, void *user) {
 	R_RETURN_VAL_IF_FAIL (cb, NULL);
 	REsilHandler *h = R_NEW0 (REsilHandler);
-	if (!h) {
-		return NULL;
-	}
 	h->cb = cb;
 	h->user = user;
 	return h;

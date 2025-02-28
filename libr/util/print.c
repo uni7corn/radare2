@@ -307,7 +307,6 @@ R_API RPrint* r_print_new(void) {
 		return NULL;
 	}
 	r_str_ncpy (p->datefmt, "%Y-%m-%d %H:%M:%S %u", sizeof (p->datefmt));
-	r_io_bind_init (p->iob);
 	p->pairs = true;
 	p->resetbg = true;
 	p->cb_printf = libc_printf;
@@ -445,10 +444,7 @@ R_API void r_print_addr(RPrint *p, ut64 addr) {
 		ch = '|';
 	}
 	if (p && p->pava) {
-		ut64 va = p->iob.p2v (p->iob.io, addr);
-		if (va != UT64_MAX) {
-			addr = va;
-		}
+		p->iob.p2v (p->iob.io, addr, &addr);
 	}
 	if (use_segoff) {
 		ut32 s, a;
@@ -1367,11 +1363,7 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 					if (p && p->charset && p->charset->loaded) {
 						ut8 input[2] = {ch, 0};
 						ut8 output[32];
-#if R2_USE_NEW_ABI
 						size_t len = r_charset_encode_str (p->charset, output, sizeof (output), input, 1, false);
-#else
-						size_t len = r_charset_encode_str (p->charset, output, sizeof (output), input, 1);
-#endif
 						ch = (len > 0)? *output: '?';
 					}
 					r_print_byte (p, addr + j, "%c", j, ch);

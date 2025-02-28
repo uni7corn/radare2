@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2008-2023 - condret, pancake, alvaro_fe */
+/* radare2 - LGPL - Copyright 2008-2025 - condret, pancake, alvaro_fe */
 
 #include <r_io.h>
 #include <sdb/sdb.h>
@@ -32,7 +32,7 @@ R_API void r_io_init(RIO* io) {
 }
 
 R_API void r_io_free(RIO *io) {
-	if (io) {
+	if (R_LIKELY (io)) {
 		r_io_fini (io);
 		free (io);
 	}
@@ -51,7 +51,7 @@ R_API RIODesc *r_io_open_buffer(RIO *io, RBuffer *b, int perm, int mode) {
 	free (uri);
 	return desc;
 #else
-	char *uri = r_str_newf ("rbuf://%p", b);
+	char *uri = r_str_newf ("rbuf://0x%08"PFMT64x, (ut64)(size_t)(void *)b);
 	RIODesc *desc = r_io_open_nomap (io, uri, perm, mode);
 	free (uri);
 	return desc;
@@ -105,7 +105,7 @@ R_API RList* r_io_open_many(RIO* io, const char* uri, int perm, int mode) {
 	RList* desc_list;
 	RListIter* iter;
 	RIODesc* desc;
-	R_RETURN_VAL_IF_FAIL (io && io->files && uri, NULL);
+	R_RETURN_VAL_IF_FAIL (io && io->files.pool && uri, NULL);
 	RIOPlugin* plugin = r_io_plugin_resolve (io, uri, 1);
 	if (!plugin || !plugin->open_many || !plugin->close) {
 		return NULL;
@@ -164,7 +164,7 @@ R_API bool r_io_reopen(RIO* io, int fd, int perm, int mode) {
 		r_io_desc_exchange (io, od->fd, nd->fd);
 		r_io_desc_close (od);
 		if (nd->perm & R_PERM_W) {
-			io->coreb.cmdf (io->coreb.core, "omfg");
+			io->coreb.cmdf (io->coreb.core, "ompg");
 		}
 		return true;
 	}
@@ -449,13 +449,14 @@ R_API bool r_io_set_write_mask(RIO* io, const ut8* mask, int len) {
 	return true;
 }
 
-R_API ut64 r_io_p2v(RIO *io, ut64 pa) {
-	R_RETURN_VAL_IF_FAIL (io, 0);
-	RIOMap *map = r_io_map_get_paddr (io, pa);
-	if (map) {
-		return pa - map->delta + r_io_map_begin (map);
+R_API bool r_io_p2v(RIO *io, ut64 p, ut64 *v) {
+	R_RETURN_VAL_IF_FAIL (io && v, false);
+	RIOMap *map = r_io_map_get_paddr (io, p);
+	if (!map) {
+		return false;
 	}
-	return UT64_MAX;
+	*v = p - map->delta + r_io_map_begin (map);
+	return true;
 }
 
 R_API ut64 r_io_v2p(RIO *io, ut64 va) {
@@ -499,6 +500,7 @@ R_API void r_io_bind(RIO *io, RIOBind *bnd) {
 	bnd->fd_remap = r_io_map_remap_fd;
 	bnd->is_valid_offset = r_io_is_valid_offset;
 	bnd->bank_get = r_io_bank_get;
+	bnd->bank_use = r_io_bank_use;
 	bnd->map_get = r_io_map_get;
 	bnd->map_get_at = r_io_map_get_at;
 	bnd->map_get_paddr = r_io_map_get_paddr;
@@ -572,7 +574,7 @@ static bool drain_cb(void *user, void *data, ut32 id) {
 
 R_API void r_io_drain_overlay(RIO *io) {
 	R_RETURN_IF_FAIL (io);
-	r_id_storage_foreach (io->maps, drain_cb, NULL);
+	r_id_storage_foreach (&io->maps, drain_cb, NULL);
 }
 
 R_API bool r_io_get_region_at(RIO *io, RIORegion *region, ut64 addr) {
@@ -598,9 +600,6 @@ R_API bool r_io_get_region_at(RIO *io, RIORegion *region, ut64 addr) {
 static ptrace_wrap_instance *io_ptrace_wrap_instance(RIO *io) {
 	if (!io->ptrace_wrap) {
 		io->ptrace_wrap = R_NEW (ptrace_wrap_instance);
-		if (!io->ptrace_wrap) {
-			return NULL;
-		}
 		if (ptrace_wrap_instance_start (io->ptrace_wrap) < 0) {
 			R_FREE (io->ptrace_wrap);
 			return NULL;

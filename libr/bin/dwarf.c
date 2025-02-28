@@ -1,6 +1,7 @@
-/* radare - LGPL - Copyright 2012-2024 - pancake, Fedor Sakharov */
+/* radare - LGPL - Copyright 2012-2025 - pancake, Fedor Sakharov */
 
 #include <r_core.h>
+#include "format/elf/elf.h"
 
 #define READ8(buf)                                                \
 	(((buf) + sizeof (ut8) < buf_end) ? ((ut8 *)buf)[0] : 0); \
@@ -308,7 +309,9 @@ static const char *dwarf_langs[] = {
 	[DW_LANG_Dylan] = "Dylan",
 	[DW_LANG_C_plus_plus_14] = "C++14",
 	[DW_LANG_Fortran03] = "Fortran03",
-	[DW_LANG_Fortran08] = "Fortran08"
+	[DW_LANG_Fortran08] = "Fortran08",
+	[DW_LANG_Modula3] = "Modula3",
+	[DW_LANG_OpenCL] = "OpenCL",
 };
 
 static const char *dwarf_unit_types[] = {
@@ -366,13 +369,29 @@ static const char *dwarf_sn_xcoff64[DWARF_SN_MAX] = {
 	[DWARF_SN_PUBTYPES] = "dwpbtyp"
 };
 
+
+static R_TH_LOCAL RBinObject *lastObject = NULL;
+static R_TH_LOCAL RBinSection *lastSection[DWARF_SN_MAX] = {NULL};
+
+static void dwarf_cache_reset(void) {
+	lastObject = NULL;
+	int i;
+	for (i = 0; i < DWARF_SN_MAX; i++) {
+		lastSection[i] = NULL;
+	}
+}
+
 // 1 of 20s spent in this non-mnemonized function
 static RBinSection *getsection(RBin *bin, int sn) {
+	R_RETURN_VAL_IF_FAIL (sn >= 0 && sn < DWARF_SN_MAX, NULL);
 	RListIter *iter;
 	RBinSection *section = NULL;
 	RBinObject *o = R_UNWRAP3 (bin, cur, bo);
+	if (o != lastObject) {
+		dwarf_cache_reset ();
+		lastObject = o;
+	}
 	char const *rclass = R_UNWRAP3 (o, info, rclass);
-	R_RETURN_VAL_IF_FAIL (sn >= 0 && sn < DWARF_SN_MAX, NULL);
 	if (R_LIKELY (o && o->sections)) {
 		/* XXX: xcoff64 specific hack */
 		const char * const *name_tab = rclass && !strcmp (o->info->rclass, "xcoff64")
@@ -382,12 +401,32 @@ static RBinSection *getsection(RBin *bin, int sn) {
 		if (!name_str) {
 			return NULL;
 		}
+		if (lastSection[sn]) {
+			RBinSection *ls = lastSection[sn];
+			const char *lsn = ls->name;
+			if (strstr (lsn , name_str)) {
+				if (r_str_startswith (lsn, ".debug_") && R_BIN_ELF_SCN_IS_COMPRESSED (ls->flags))  {
+					R_LOG_WARN ("Compressed dwarf sections not yet supported");
+					return NULL;
+				}
+				if (strstr (lsn, "zdebug")) {
+					R_LOG_WARN ("Compressed dwarf sections not yet supported");
+					return NULL;
+				}
+				return ls;
+			}
+		}
 		r_list_foreach (o->sections, iter, section) {
 			if (strstr (section->name, name_str)) {
+				if (r_str_startswith (section->name, ".debug_") && R_BIN_ELF_SCN_IS_COMPRESSED (section->flags))  {
+					R_LOG_WARN ("Compressed dwarf sections not yet supported");
+					return NULL;
+				}
 				if (strstr (section->name, "zdebug")) {
 					R_LOG_WARN ("Compressed dwarf sections not yet supported");
 					return NULL;
 				}
+				lastSection[sn] = section;
 				return section;
 			}
 		}
@@ -399,16 +438,16 @@ static RBinSection *getsection(RBin *bin, int sn) {
 static ut8 *get_section_bytes(RBin *bin, int sect_name, size_t *len) {
 	R_RETURN_VAL_IF_FAIL (bin && len, NULL);
 	RBinSection *section = getsection (bin, sect_name);
-	RBinFile *binfile = bin ? bin->cur: NULL;
-	if (!section || !binfile) {
+	if (!section || !bin->cur) {
 		return NULL;
 	}
+	RBinFile *binfile = bin->cur;
 	if (section->size > binfile->size) {
 		return NULL;
 	}
 	*len = section->size;
 	ut8 *buf = calloc (1, *len);
-	if (buf) {
+	if (R_LIKELY (buf)) {
 		r_buf_read_at (binfile->buf, section->paddr, buf, *len);
 	}
 	return buf;
@@ -517,18 +556,13 @@ static char *get_compilation_directory_key(int debug_line_offset) {
 	if (debug_line_offset < 0) {
 		return NULL;
 	}
-	const char *comp_dir_attribute_name = "DW_AT_comp_dir";
-	size_t debug_line_offset_len = snprintf (NULL, 0, "%d", debug_line_offset);
-	size_t bufsz = strlen (comp_dir_attribute_name) + debug_line_offset_len + 1;
-	char *key = malloc (sizeof (char) * bufsz);
-	snprintf (key, bufsz, "%s%d", comp_dir_attribute_name, debug_line_offset);
-	return key;
+	return r_str_newf ("DW_AT_comp_dir%d", debug_line_offset);
 }
 
 // Parses source file header of DWARF version <= 4
 static const ut8 *parse_line_header_source(RBinFile *bf, const ut8 *buf, const ut8 *buf_end, RBinDwarfLineHeader *hdr, Sdb *sdb, int mode, PrintfCallback print, int debug_line_offset) {
 	int i = 0;
-	size_t count;
+	size_t count = 1;
 	const ut8 *tmp_buf = NULL;
 	char *fn = NULL;
 
@@ -554,7 +588,6 @@ static const ut8 *parse_line_header_source(RBinFile *bf, const ut8 *buf, const u
 	}
 
 	tmp_buf = buf;
-	count = 0;
 	if (mode == R_MODE_PRINT) {
 		print ("\n");
 		print (" The File Name Table:\n");
@@ -577,65 +610,61 @@ static const ut8 *parse_line_header_source(RBinFile *bf, const ut8 *buf, const u
 			}
 			buf += len + 1;
 			if (buf >= buf_end) {
-				buf = NULL;
 				goto beach;
 			}
-			buf = r_uleb128 (buf, buf_end - buf, &id_idx, NULL);
-			if (buf >= buf_end) {
-				buf = NULL;
+			const ut8 *nbuf = r_uleb128 (buf, buf_end - buf, &id_idx, NULL);
+			if (!buf || buf == nbuf || nbuf >= buf_end) {
 				goto beach;
 			}
-			buf = r_uleb128 (buf, buf_end - buf, &mod_time, NULL);
-			if (buf >= buf_end) {
-				buf = NULL;
+			buf = nbuf;
+			nbuf = r_uleb128 (buf, buf_end - buf, &mod_time, NULL);
+			if (!buf || buf == nbuf || nbuf >= buf_end) {
 				goto beach;
 			}
-			buf = r_uleb128 (buf, buf_end - buf, &file_len, NULL);
-			if (buf >= buf_end) {
-				buf = NULL;
+			buf = nbuf;
+			nbuf = r_uleb128 (buf, buf_end - buf, &file_len, NULL);
+			if (!buf || buf == nbuf || nbuf >= buf_end) {
 				goto beach;
 			}
+			buf = nbuf;
 
 			if (i) {
-				char *include_dir = NULL, *comp_dir = NULL, *pinclude_dir = NULL, *comp_dir_key = NULL;
+				char *include_dir = NULL;
 				if (id_idx > 0) {
-					include_dir = pinclude_dir = sdb_array_get (sdb, "includedirs", id_idx - 1, 0);
+					include_dir = sdb_array_get (sdb, "includedirs", id_idx - 1, 0);
 					if (include_dir && include_dir[0] != '/') {
-						comp_dir_key = get_compilation_directory_key (debug_line_offset);
-						if (comp_dir_key) {
-							comp_dir = sdb_get (bf->sdb_addrinfo, comp_dir_key, 0);
-						} else {
-							comp_dir = sdb_get (bf->sdb_addrinfo, "DW_AT_comp_dir", 0);
-						}
+						char *comp_dir_key = get_compilation_directory_key (debug_line_offset);
+						const char *k = comp_dir_key? comp_dir_key: "DW_AT_comp_dir";
+						const char *comp_dir = sdb_const_get (bf->sdb_addrinfo, k, 0);
 						if (comp_dir) {
-							include_dir = r_str_newf ("%s/%s/", comp_dir, include_dir);
+							include_dir = r_str_newf ("%s/%s", comp_dir, include_dir);
 						}
+						free (comp_dir_key);
+					} else {
+						// XXX
 					}
 				} else {
-					comp_dir_key = get_compilation_directory_key (debug_line_offset);
+					char *comp_dir_key = get_compilation_directory_key (debug_line_offset);
 					if (comp_dir_key) {
-						include_dir = pinclude_dir = sdb_get (bf->sdb_addrinfo, comp_dir_key, 0);
+						include_dir = sdb_get (bf->sdb_addrinfo, comp_dir_key, 0);
 					} else {
-						include_dir = pinclude_dir = sdb_get (bf->sdb_addrinfo, "DW_AT_comp_dir", 0);
+						include_dir = sdb_get (bf->sdb_addrinfo, "DW_AT_comp_dir", 0);
 					}
 					if (!include_dir) {
-						include_dir = "./";
+						include_dir = strdup ("./");
 					}
+					free (comp_dir_key);
 				}
 
-				free (comp_dir_key);
-
 				if (hdr->file_names) {
-					hdr->file_names[count].name = r_str_newf("%s/%s", r_str_get (include_dir), fn);
+					hdr->file_names[count].name = r_str_newf ("%s/%s", r_str_get (include_dir), fn);
 					hdr->file_names[count].id_idx = id_idx;
 					hdr->file_names[count].mod_time = mod_time;
 					hdr->file_names[count].file_len = file_len;
+					// TODO: add_files (bf, hdr->file_names[count].name);
+					// eprintf ("ADP %s\n", hdr->file_names[count].name);
 				}
-				if (comp_dir) {
-					R_FREE (include_dir);
-					R_FREE (comp_dir);
-				}
-				R_FREE (pinclude_dir);
+				R_FREE (include_dir);
 			}
 			count++;
 			if (mode == R_MODE_PRINT && i) {
@@ -644,14 +673,14 @@ static const ut8 *parse_line_header_source(RBinFile *bf, const ut8 *buf, const u
 			}
 		}
 		if (i == 0) {
-			if (count > 0) {
-				hdr->file_names = calloc (sizeof (file_entry), count);
-			} else {
-				hdr->file_names = NULL;
+			hdr->file_names = calloc (sizeof (file_entry), count);
+			if (!hdr->file_names) {
+				R_LOG_ERROR ("Cannot calloc %d", count);
+				break;
 			}
 			hdr->file_names_count = count;
 			buf = tmp_buf;
-			count = 0;
+			count = 1;
 		}
 	}
 	if (mode == R_MODE_PRINT) {
@@ -698,179 +727,346 @@ static char *get_section_string(RBin *bin, RBinSection * section, size_t offset)
 	return res;
 }
 
+typedef struct entry_descriptor {
+	ut64 type;
+	ut64 form;
+} entry_descriptor;
+
+#define MAX_V5_DESCRIPTORS 7
+
+typedef struct entry_formatv5 {
+	int ndesc;
+	entry_descriptor descs[MAX_V5_DESCRIPTORS];
+} entry_formatv5;
+
+// Parse v5 directory/file content description into ent.
+static const ut8 *parse_line_entryv5(const ut8 *buf, const ut8 *buf_end, entry_formatv5 *ent) {
+	if (ent == NULL) {
+		return NULL;
+	}
+
+	ut8 nform = READ8 (buf);
+	if (nform >= MAX_V5_DESCRIPTORS) {
+		R_LOG_WARN ("Too many entry formats: %d >= %d", nform, MAX_V5_DESCRIPTORS);
+		return NULL;
+	}
+	ent->ndesc = 0;
+	int i;
+	for (i = 0; i < nform; i++) {
+		entry_descriptor *e = &ent->descs[i];
+		const ut8 *nbuf = r_uleb128 (buf, buf_end - buf, &e->type, NULL);
+		if (!nbuf || buf == nbuf) {
+			return NULL;
+		}
+
+		buf = nbuf;
+		nbuf = r_uleb128 (buf, buf_end - buf, &e->form, NULL);
+		if (!nbuf || buf == nbuf) {
+			return NULL;
+		}
+		buf = nbuf;
+		ent->ndesc++;
+	}
+	return buf;
+};
+
+static const ut8 *ut64_form_value(entry_descriptor desc, const ut8 *buf, const ut8 *buf_end, ut64 *val, bool be) {
+	const ut8 *nbuf = NULL;
+	ut64 data = 0;
+
+	switch (desc.form) {
+	case DW_FORM_udata:
+		nbuf = r_uleb128 (buf, buf_end - buf, &data, NULL);
+		if (!nbuf || nbuf == buf) {
+			return NULL;
+		}
+		*val = data;
+		return nbuf;
+	case DW_FORM_data1:
+		if (buf + 1 >= buf_end) {
+			return NULL;
+		}
+		*val = buf[0];
+		buf += 1;
+		return buf;
+	case DW_FORM_data2:
+		if (buf + 2 >= buf_end) {
+			return NULL;
+		}
+		*val = r_read_ble16 (buf, be);
+		buf += 2;
+		return buf;
+	case DW_FORM_data4:
+		if (buf + 4 >= buf_end) {
+			return NULL;
+		}
+		*val = r_read_ble32 (buf, be);
+		buf += 4;
+		return buf;
+	case DW_FORM_data8:
+		if (buf + 8 >= buf_end) {
+			return NULL;
+		}
+		*val = r_read_ble64 (buf, be);
+		buf += 8;
+		return buf;
+	default:
+		R_LOG_DEBUG ("Expected data form but got: %#x", desc.form);
+		return NULL;
+	}
+}
+
+static const ut8 *str_form_value(entry_descriptor desc, RBin *bin, const ut8 *buf, const ut8 *buf_end, char **v, bool be, bool is_64bit) {
+	const size_t maxlen = 0xfff;
+	char *name = NULL;
+	ut64 section_offset = 0;
+	RBinSection *section = NULL;
+
+	switch (desc.form) {
+	case DW_FORM_line_strp:
+		section_offset = dwarf_read_offset (is_64bit, &buf, buf_end, be);
+		section = getsection (bin, DWARF_SN_LINE_STR);
+		name = get_section_string (bin, section, section_offset);
+		if (name == NULL) {
+			return NULL;
+		}
+		r_str_ansi_strip (name);
+		r_str_replace_ch (name, '\n', 0, true);
+		r_str_replace_ch (name, '\t', 0, true);
+		*v = name;
+		return buf;
+	case DW_FORM_strp:
+		section_offset = dwarf_read_offset (is_64bit, &buf, buf_end, be);
+		section = getsection (bin, DWARF_SN_STR);
+		name = get_section_string (bin, section, section_offset);
+		if (name == NULL) {
+			return NULL;
+		}
+		r_str_ansi_strip (name);
+		r_str_replace_ch (name, '\n', 0, true);
+		r_str_replace_ch (name, '\t', 0, true);
+		*v = name;
+		return buf;
+	case DW_FORM_strp_sup:
+		// TODO: handle this properly
+		dwarf_read_offset (is_64bit, &buf, buf_end, be);
+		return buf;
+	case DW_FORM_string:
+		// TODO: find a way to test this case.
+		if (buf == NULL || buf >= buf_end) {
+			return NULL;
+		}
+		const int len = R_MIN (maxlen, (buf_end - buf));
+		if (len < 0) {
+			return NULL;
+		}
+		*v = r_str_ndup ((const char *)buf, len);
+		buf += len + 1;
+		return buf;
+	default:
+		R_LOG_DEBUG ("Expected form type string but got: %#x", desc.form);
+		return NULL;
+	}
+};
+
+static const ut8 *data16_form_value(entry_descriptor desc, const ut8 *buf, const ut8 *buf_end, ut8 val[16]) {
+	if (desc.form != DW_FORM_data16) {
+		R_LOG_DEBUG ("Expected form type data16 but got: %#x", desc.form);
+		return NULL;
+	}
+	if (buf + 16 >= buf_end) {
+		return NULL;
+	}
+
+	memcpy (val, buf, 16);
+	buf += 16;
+	return buf;
+}
+
 // TODO DWARF 5 line header parsing, very different from ver. 4
 // Because this function needs ability to parse a lot of FORMS just like debug info
 // I'll complete this function after completing debug_info parsing and merging
 // for the meanwhile I am skipping the space.
-static const ut8 *parse_line_header_source_dwarf5(RBin *bin, RBinFile *bf, const ut8 *buf, const ut8 *buf_end, RBinDwarfLineHeader *hdr, Sdb *sdb, int mode, PrintfCallback print, bool be) {
-	enum type { DIRECTORIES, FILES };
-	const size_t maxlen = 0xfff;
-	int i, j;
+static const ut8 *parse_line_header_source_dwarf5(RBin *bin, const ut8 *buf, const ut8 *buf_end, RBinDwarfLineHeader *hdr, Sdb *s, int mode, PrintfCallback print, bool be) {
+	if (mode == R_MODE_PRINT) {
+		print (" The Directory Table:\n");
+	}
 
-	for (i = DIRECTORIES; buf && i <= FILES; i++) {
-		if (mode == R_MODE_PRINT && i == DIRECTORIES) {
-			print (" The Directory Table:\n");
-		} else if (mode == R_MODE_PRINT && i == FILES) {
-			print ("\n");
-			print (" The File Name Table:\n");
-			print ("  Entry Dir     Time      Size       Name\n");
-		}
+	entry_formatv5 dir_form = {0};
+	buf = parse_line_entryv5 (buf, buf_end, &dir_form);
+	if (buf == NULL) {
+		R_LOG_WARN ("Invalid uleb128 for dwarf directory entry format");
+		return NULL;
+	}
+	if (dir_form.ndesc <= 0) {
+		R_LOG_WARN ("Invalid number of descriptors for directory table");
+		return NULL;
+	}
 
-		ut8 entry_format_count = READ8 (buf);
-		const ut8 *entry_format = buf;
-
-		ut64 total_entries = 0;
-		for (j = 0; j < entry_format_count; j++) {
-			buf = r_uleb128 (buf, buf_end - buf, NULL, NULL);
-			buf = r_uleb128 (buf, buf_end - buf, NULL, NULL);
-		}
-
-		buf = r_uleb128 (buf, buf_end - buf, &total_entries, NULL);
-		if (i == FILES) {
-			if (total_entries > 0) {
-				hdr->file_names = calloc (sizeof (file_entry), total_entries);
-				if (!hdr->file_names) {
-					buf = NULL;
-					goto beach;
-				}
-			} else {
-				hdr->file_names = NULL;
-			}
-			hdr->file_names_count = total_entries;
-		}
-
-		ut64 index;
-		for (index = 0; buf && index < total_entries; index++) {
-			int count = 0;
-			const ut8 *format = entry_format;
-
-			ut8 entry_format_index;
-			for (entry_format_index = 0; buf && entry_format_index < entry_format_count; entry_format_index++) {
-				ut64 content_type_code, form_code;
+	ut64 ndir_entry = 0;
+	const ut8 *nbuf = r_uleb128 (buf, buf_end - buf, &ndir_entry, NULL);
+	if (!nbuf || nbuf == buf) {
+		R_LOG_WARN ("Invalid uleb128 for dwarf directory count");
+		return NULL;
+	}
+	ut64 i, j;
+	if ((int)ndir_entry != -1) {
+		buf = nbuf;
+		for (i = 0; i < ndir_entry; i++) {
+			for (j = 0; j < dir_form.ndesc; j++) {
+				entry_descriptor desc = dir_form.descs[j];
 				char *name = NULL;
-				ut64 data = 0;
 
-				format = r_uleb128 (format, buf_end - format, &content_type_code, NULL);
-				format = r_uleb128 (format, buf_end - format, &form_code, NULL);
-				switch (form_code) {
-				case DW_FORM_string:
-					// TODO: find a way to test this case.
-					if (buf && buf <= buf_end) {
-						int mylen = R_MIN (maxlen, (buf_end - buf));
-						if (mylen > 0) {
-							name = r_str_ndup ((const char *)buf, mylen);
-							buf += mylen + 1;
-						} else {
-							name = NULL;
-							buf++;
-						}
-					}
-					break;
-				case DW_FORM_strp_sup:
-					// TODO: handle this properly
-					dwarf_read_offset (hdr->is_64bit, &buf, buf_end, be);
-					break;
-				case DW_FORM_strp:
-				case DW_FORM_line_strp:
-					{
-					ut64 section_offset = dwarf_read_offset (hdr->is_64bit, &buf, buf_end, be);
-					RBinSection *section = (form_code == DW_FORM_strp)
-						? getsection (bin, DWARF_SN_STR)
-						: getsection (bin, DWARF_SN_LINE_STR);
-					name = get_section_string (bin, section, section_offset);
-					if (name) {
-						r_str_ansi_strip (name);
-						r_str_replace_ch (name, '\n', 0, true);
-						r_str_replace_ch (name, '\t', 0, true);
-					}
-					}
-					break;
-				case DW_FORM_data1:
-					if (buf) {
-						data = READ8 (buf);
-					}
-					break;
-				case DW_FORM_data2:
-					if (buf && buf + 2 < buf_end) {
-						data = READ16 (buf);
-					}
-					break;
-				case DW_FORM_data4:
-					data = READ32 (buf);
-					break;
-				case DW_FORM_data8:
-					data = READ64 (buf);
-					break;
-				case DW_FORM_data16:
-					// TODO: We only get here if it's an MD5 hash
-					break;
-				case DW_FORM_udata:
-					buf = r_uleb128 (buf, buf_end - buf, &data, NULL);
-					break;
-				}
-
-				switch (content_type_code) {
+				switch (desc.type) {
 				case DW_LNCT_path:
-					if (i == FILES) {
-						// For now just save the filename. Prepend the directory once we have it.
-						if (hdr->file_names) {
-							hdr->file_names[count].name = name;
-						}
-					} else {
-						add_sdb_include_dir (sdb, name, index);
-						free (name);
+					buf = str_form_value (desc, bin, buf, buf_end, &name, be, hdr->is_64bit);
+					if (buf == NULL || name == NULL) {
+						R_LOG_WARN ("Invalid description (%#x) for directory %d %d", desc.form, i, ndir_entry);
+						return NULL;
 					}
-					name = NULL;
+					add_sdb_include_dir (s, name, i);
+					free (name);
 					break;
-				case DW_LNCT_directory_index:
-					if (hdr->file_names) {
-						hdr->file_names[count].id_idx = data;
-						// prepend directory to the file name
-						if (hdr->file_names[count].name) {
-							char *dir = sdb_array_get (sdb, "includedirs", hdr->file_names[count].id_idx, 0);
-							char *filename = hdr->file_names[count].name;
-							if (dir && strcmp (filename, dir)) {
-								hdr->file_names[count].name = r_str_newf ("%s/%s", r_str_get (dir), filename);
-								free (filename);
-							}
-						}
-					}
-					break;
-				case DW_LNCT_timestamp:
-					if (hdr->file_names) {
-						hdr->file_names[count].mod_time = data;
-					}
-					break;
-				case DW_LNCT_size:
-					if (hdr->file_names) {
-						hdr->file_names[count].file_len = data;
-					}
-					break;
-				case DW_LNCT_MD5:
-					// TODO Save the hash of the file.
-					break;
+				default:
+					R_LOG_WARN ("Invalid description type (%#x)", desc.type);
+					// TODO: Skip this value instead of failing?
+					return NULL;
 				}
 			}
-
 			if (mode == R_MODE_PRINT) {
-				switch (i) {
-				case DIRECTORIES:
-					// Keep directories 0 indexed?
-					print ("  %" PFMT64u "     %s\n", index, sdb_array_get (sdb, "includedirs", index, 0));
-					break;
-				case FILES:
-					if (hdr->file_names) {
-						print ("  %" PFMT64u "     %" PFMT32d "       %" PFMT32d "         %" PFMT32d "          %s\n",
-							index + 1, hdr->file_names[count].id_idx, hdr->file_names[count].mod_time,
-							hdr->file_names[count].file_len, hdr->file_names[count].name);
-					} else {
-						R_LOG_WARN ("file_names is null");
-					}
+				print ("  %" PFMT64u "     %s\n", i, sdb_array_get (s, "includedirs", i, 0));
+			}
+		}
+	}
+
+	if (mode == R_MODE_PRINT) {
+		print ("\n");
+		print (" The File Name Table:\n");
+		print ("  Entry Dir     Time      Size       MD5                              Name\n");
+	}
+
+	entry_formatv5 file_form = {0};
+	buf = parse_line_entryv5 (buf, buf_end, &file_form);
+	if (buf == NULL) {
+		R_LOG_WARN ("Invalid uleb128 for dwarf file entry format");
+		return NULL;
+	}
+	if (file_form.ndesc <= 0) {
+		R_LOG_WARN ("Invalid number of descriptors for file table");
+		return NULL;
+	}
+
+	ut64 nfile_entry = 0;
+	nbuf = r_uleb128 (buf, buf_end - buf, &nfile_entry, NULL);
+	if (!nbuf || nbuf == buf) {
+		R_LOG_WARN ("Invalid uleb128 for dwarf file count");
+		return NULL;
+	}
+	buf = nbuf;
+
+	hdr->file_names = calloc (sizeof (file_entry), nfile_entry);
+	if (hdr->file_names == NULL) {
+		return NULL;
+	}
+	hdr->file_names_count = nfile_entry;
+
+	for (i = 0; i < nfile_entry; i++) {
+		file_entry *file = &hdr->file_names[i];
+		for (j = 0; j < file_form.ndesc; j++) {
+			entry_descriptor desc = file_form.descs[j];
+			char *name = NULL;
+			ut64 data = 0;
+
+			switch (desc.type) {
+			case DW_LNCT_path:
+				buf = str_form_value (desc, bin, buf, buf_end, &name, be, hdr->is_64bit);
+				if (buf == NULL || name == NULL) {
+					R_LOG_WARN ("Invalid description (%#x) for file path", desc.form);
+					return NULL;
+				}
+				file->name = name;
+				break;
+			case DW_LNCT_timestamp:
+				buf = ut64_form_value (desc, buf, buf_end, &data, be);
+				if (buf == NULL) {
+					R_LOG_WARN ("Invalid description (%#x,%#x) for file timestamp", desc.type, desc.form);
+					return NULL;
+				}
+				file->mod_time = data;
+				break;
+			case DW_LNCT_directory_index:
+				buf = ut64_form_value (desc, buf, buf_end, &data, be);
+				if (buf == NULL) {
+					R_LOG_WARN ("Invalid description (%#x,%#x) for file dir index", desc.type, desc.form);
+					return NULL;
+				}
+				if (file->name == NULL) {
 					break;
 				}
-			}
+				file->id_idx = data;
 
-			count++;
+				// prepend directory to the file name
+				char *dir = sdb_array_get (s, "includedirs", file->id_idx, 0);
+				char *filename = file->name;
+				if (dir == NULL || !strcmp (filename, dir)) {
+					break;
+				}
+
+				bool isabs = r_file_is_abspath (dir);
+				if (file->id_idx == 0 || isabs) {
+					file->name = r_str_newf ("%s/%s", dir, filename);
+					free (filename);
+				} else {
+					char *comp_unit_dir = sdb_array_get (s, "includedirs", 0, 0);
+					if (comp_unit_dir == NULL || !strcmp (filename, comp_unit_dir)) {
+						break;
+					}
+					char *tmp = r_str_newf ("%s/%s/%s",
+								comp_unit_dir, dir, filename);
+					file->name = tmp;
+					free (filename);
+				}
+				break;
+			case DW_LNCT_size:
+				buf = ut64_form_value (desc, buf, buf_end, &data, be);
+				if (buf == NULL) {
+					R_LOG_WARN ("Invalid description (%#x,%#x) for file size", desc.type, desc.form);
+					return NULL;
+				}
+				file->file_len = data;
+				break;
+			case DW_LNCT_MD5:
+				buf = data16_form_value (desc, buf, buf_end, file->md5sum);
+				if (buf == NULL) {
+					R_LOG_WARN ("Invalid description (%#x,%#x) for file checksum", desc.type, desc.form);
+					return NULL;
+				}
+				file->has_checksum = true;
+				break;
+			default:
+				R_LOG_ERROR ("Invalid or unsupported DW line number content type %#x", desc.type);
+				return NULL;
+			}
+		}
+		if (mode == R_MODE_PRINT) {
+			// number of hexes chars in a md5 checksum plus NULL
+			char sumstr[33];
+
+			memset (sumstr, ' ', sizeof (sumstr));
+			sumstr[32] = '\0';
+
+			if (file->has_checksum) {
+				int i;
+				ut8 *p = &file->md5sum[0];
+				static const char *hex = "0123456789abcdef";
+
+				for (i = 0; i < 16; i++) {
+					sumstr[i * 2] = hex[(p[i] >> 4) & 0x0f];
+					sumstr[i * 2 + 1] = hex[p[i] & 0x0f];
+				}
+			}
+			print ("  %" PFMT64u "     %" PFMT32d "       %" PFMT32d "         %" PFMT32d "          %s %s\n",
+			       i + 1, file->id_idx, file->mod_time, file->file_len, sumstr, file->name);
 		}
 	}
 
@@ -878,9 +1074,7 @@ static const ut8 *parse_line_header_source_dwarf5(RBin *bin, RBinFile *bf, const
 		print ("\n");
 	}
 
-beach:
-	sdb_free (sdb);
-
+	sdb_free (s);
 	return buf;
 }
 
@@ -957,23 +1151,23 @@ static const ut8 *parse_line_header(RBin *bin, RBinFile *bf, const ut8 *buf, con
 		hdr->std_opcode_lengths = NULL;
 	}
 
+	// XXX dat leaks
 	Sdb *sdb = sdb_new (NULL, NULL, 0);
 	if (!sdb) {
 		return NULL;
 	}
 
-	if (hdr->version <= 4) {
+	if (hdr->version < 5) {
 		buf = parse_line_header_source (bf, buf, buf_end, hdr, sdb, mode, print, debug_line_offset);
 	} else {
-		buf = parse_line_header_source_dwarf5 (bin, bf, buf, buf_end, hdr, sdb, mode, print, be);
+		buf = parse_line_header_source_dwarf5 (bin, buf, buf_end, hdr, sdb, mode, print, be);
 	}
 
 	return buf;
 }
 
-static inline void add_sdb_addrline(Sdb *s, ut64 addr, const char *file, ut64 line, ut64 column, int mode, PrintfCallback print) {
-	char offset[SDB_NUM_BUFSZ];
-	char *offset_ptr;
+static inline void add_sdb_addrline(RBinFile *bf, ut64 addr, const char *file, ut64 line, ut64 column, int mode, PrintfCallback print) {
+	Sdb *s = bf->sdb_addrinfo;
 	if (!s || R_STR_ISEMPTY (file)) {
 		return;
 	}
@@ -1009,6 +1203,9 @@ static inline void add_sdb_addrline(Sdb *s, ut64 addr, const char *file, ut64 li
 #else
 	p = file;
 #endif
+#if 0
+	char offset[SDB_NUM_BUFSZ];
+	char *offset_ptr;
 	char *fileline = (column > 0)
 		? r_str_newf ("%s|%"PFMT64d"|%"PFMT64d, p, line, column)
 		: r_str_newf ("%s|%"PFMT64d, p, line);
@@ -1019,6 +1216,15 @@ static inline void add_sdb_addrline(Sdb *s, ut64 addr, const char *file, ut64 li
 	sdb_add (s, offset_ptr, fileline, 0);
 	sdb_add (s, fileline, offset_ptr, 0);
 	free (fileline);
+#else
+	RBinDbgItem item = {
+		.addr = addr,
+		.file = file,
+		.line = line,
+		.column = column,
+	};
+	bf->addrline.al_add (&bf->addrline, item);
+#endif
 }
 
 static const ut8 *parse_ext_opcode(RBin *bin, const ut8 *obuf, size_t len, const RBinDwarfLineHeader *hdr, RBinDwarfSMRegisters *regs, int mode) {
@@ -1051,9 +1257,9 @@ static const ut8 *parse_ext_opcode(RBin *bin, const ut8 *obuf, size_t len, const
 		regs->end_sequence = true;
 
 		if (binfile && binfile->sdb_addrinfo && hdr->file_names) {
-			int fnidx = regs->file - 1;
+			int fnidx = regs->file;
 			if (fnidx >= 0 && fnidx < hdr->file_names_count) {
-				add_sdb_addrline (binfile->sdb_addrinfo, regs->address,
+				add_sdb_addrline (binfile, regs->address,
 						hdr->file_names[fnidx].name,
 						regs->line, regs->column, mode, print);
 			}
@@ -1143,15 +1349,15 @@ static const ut8 *parse_spec_opcode(
 		print ("advance Address by %"PFMT64d " to 0x%"PFMT64x" and Line by %d to %"PFMT64d"\n",
 			advance_adr, regs->address, line_increment, regs->line);
 	}
-	if (binfile && binfile->sdb_addrinfo && hdr->file_names) {
-		int idx = regs->file -1;
+	if (binfile && hdr->file_names) {
+		int idx = regs->file;
 		if (idx >= 0 && idx < hdr->file_names_count) {
-			add_sdb_addrline (binfile->sdb_addrinfo, regs->address,
+			add_sdb_addrline (binfile, regs->address,
 					hdr->file_names[idx].name,
 					regs->line, regs->column, mode, print);
 		}
 	}
-	regs->basic_block = false; // XXX cant we just use true and false here??
+	regs->basic_block = false;
 	regs->prologue_end = false;
 	regs->epilogue_begin = false;
 	regs->discriminator = 0;
@@ -1181,10 +1387,10 @@ static const ut8 *parse_std_opcode(RBin *bin, const ut8 *obuf, size_t len, const
 		if (mode == R_MODE_PRINT) {
 			print ("Copy\n");
 		}
-		if (binfile && binfile->sdb_addrinfo && hdr->file_names) {
-			int fnidx = regs->file - 1;
+		if (binfile && hdr->file_names) {
+			int fnidx = regs->file;
 			if (fnidx >= 0 && fnidx < hdr->file_names_count) {
-				add_sdb_addrline (binfile->sdb_addrinfo,
+				add_sdb_addrline (binfile,
 					regs->address,
 					hdr->file_names[fnidx].name,
 					regs->line, regs->column, mode, print);
@@ -1201,7 +1407,7 @@ static const ut8 *parse_std_opcode(RBin *bin, const ut8 *obuf, size_t len, const
 		}
 		break;
 	case DW_LNS_advance_line:
-		buf = r_leb128(buf, buf_end - buf, &sbuf);
+		buf = r_leb128 (buf, buf_end - buf, &sbuf);
 		regs->line += sbuf;
 		if (mode == R_MODE_PRINT) {
 			print ("Advance line by %"PFMT64d", to %"PFMT64d"\n", sbuf, regs->line);
@@ -1602,7 +1808,7 @@ static void print_abbrev_section(RBinDwarfDebugAbbrev *da, PrintfCallback print)
 			for (j = 0; j < da->decls[i].count; j++) {
 				attr_name = da->decls[i].defs[j].attr_name;
 				attr_form = da->decls[i].defs[j].attr_form;
-				if (is_printable_attr(attr_name) && is_printable_form(attr_form)) {
+				if (is_printable_attr (attr_name) && is_printable_form (attr_form)) {
 					print ("    %-30s %-30s\n",
 							dwarf_attr_encodings[attr_name],
 							dwarf_attr_form_encodings[attr_form]);
@@ -2373,7 +2579,7 @@ static RBinDwarfDebugInfo *parse_info_raw(RBin *bin, Sdb *sdb, RBinDwarfDebugAbb
 		if (da->decls->count >= da->capacity) {
 			R_LOG_WARN ("malformed dwarf have not enough buckets for decls");
 		}
-		r_warn_if_fail (da->count <= da->capacity);
+		R_WARN_IF_FAIL (da->count <= da->capacity);
 
 		// find abbrev start for current comp unit
 		// we could also do naive, ((char *)da->decls) + abbrev_offset,
@@ -2465,6 +2671,38 @@ static RBinDwarfDebugAbbrev *parse_abbrev_raw(const ut8 *obuf, size_t len) {
 	return da;
 }
 
+static const char *getstr(RBinDwarfAttrValue *val) {
+	switch (val->attr_form) {
+	case DW_FORM_strx:
+	case DW_FORM_strx1:
+	case DW_FORM_strx2:
+	case DW_FORM_strx3:
+	case DW_FORM_strx4:
+	case DW_FORM_line_strp:
+	case DW_FORM_strp_sup:
+	case DW_FORM_strp:
+	case DW_FORM_string:
+		return val->string.content;
+	}
+	return NULL;
+}
+
+static ut64 getint(RBinDwarfAttrValue *val) {
+	switch (val->attr_form) {
+	case DW_FORM_addr:
+	case DW_FORM_addrx:
+	case DW_FORM_addrx1:
+	case DW_FORM_addrx2:
+	case DW_FORM_addrx3:
+	case DW_FORM_addrx4:
+	case DW_FORM_loclistx:
+	case DW_FORM_rnglistx:
+		return val->address;
+	case DW_FORM_implicit_const:
+		return val->uconstant;
+	}
+	return 0;
+}
 /**
  * @brief Parses .debug_info section
  *
@@ -2473,17 +2711,17 @@ static RBinDwarfDebugAbbrev *parse_abbrev_raw(const ut8 *obuf, size_t len) {
  * @param mode R_MODE_PRINT to print
  * @return RBinDwarfDebugInfo* Parsed information, NULL if error
  */
-R_API RBinDwarfDebugInfo *r_bin_dwarf_parse_info(RBinDwarfDebugAbbrev *da, RBin *bin, int mode) {
+R_API RBinDwarfDebugInfo *r_bin_dwarf_parse_info(RBin *bin, RBinDwarfDebugAbbrev *da, int mode) {
 	R_RETURN_VAL_IF_FAIL (da && bin, NULL);
 	RBinDwarfDebugInfo *info = NULL;
 	RBinSection *section = getsection (bin, DWARF_SN_INFO);
-	RBinFile *binfile = bin->cur;
+	RBinFile *bf = bin->cur;
 
 	ut64 debug_str_len = 0;
 	ut8 *debug_str_buf = NULL;
 
 	const bool be = r_bin_is_big_endian (bin);
-	if (binfile && section) {
+	if (bf && section) {
 		RBinSection *debug_str = getsection (bin, DWARF_SN_STR);
 		if (debug_str) {
 			debug_str_len = debug_str->size;
@@ -2491,8 +2729,7 @@ R_API RBinDwarfDebugInfo *r_bin_dwarf_parse_info(RBinDwarfDebugAbbrev *da, RBin 
 			if (!debug_str_buf) {
 				goto cleanup;
 			}
-			st64 ret = r_buf_read_at (binfile->buf, debug_str->paddr,
-				debug_str_buf, debug_str_len);
+			st64 ret = r_buf_read_at (bf->buf, debug_str->paddr, debug_str_buf, debug_str_len);
 			if (ret != debug_str_len) {
 				goto cleanup;
 			}
@@ -2507,14 +2744,63 @@ R_API RBinDwarfDebugInfo *r_bin_dwarf_parse_info(RBinDwarfDebugAbbrev *da, RBin 
 		if (!buf) {
 			goto cleanup;
 		}
-		if (!r_buf_read_at (binfile->buf, section->paddr, buf, len)) {
+		if (!r_buf_read_at (bf->buf, section->paddr, buf, len)) {
 			free (buf);
 			goto cleanup;
 		}
 		/* set the endianity global [HOTFIX] */
-		info = parse_info_raw (bin, binfile->sdb_addrinfo, da, buf, len, be);
+		info = parse_info_raw (bin, bf->sdb_addrinfo, da, buf, len, be);
 		if (mode == R_MODE_PRINT && info) {
 			print_debug_info (info, bin->cb_printf);
+		} else if (info) {
+			// TODO: load compilation units
+			// TODO: only necessary when we have no srcline inf
+			// TODO: add a command to enumerate the ranges for all the compilation units
+			// TODO: idu? -> 0x00001600 0x0001840 entry.S
+			size_t i, j, k;
+			RBinDwarfDie *dies;
+			RBinDwarfAttrValue *values;
+			for (i = 0; i < info->count; i++) {
+				dies = info->comp_units[i].dies;
+				for (j = 0; j < info->comp_units[i].count; j++) {
+					values = dies[j].attr_values;
+					const char *name = NULL;
+					const char *path = NULL;
+					ut64 low = 0;
+					// unused ut64 hig = 0;
+					for (k = 0; k < dies[j].count; k++) {
+						int n = values[k].attr_name;
+						RBinDwarfAttrValue *v = &values[k];
+						switch (n) {
+						case DW_AT_name:
+							name = getstr (v);
+							break;
+						case DW_AT_comp_dir:
+							path = getstr (v);
+							break;
+						case DW_AT_low_pc:
+							low = getint (v);
+							break;
+						case DW_AT_high_pc:
+							// hig = getint (v);
+							break;
+						}
+					}
+					if (path && name) {
+						// printf ("0x%08"PFMT64x" %s %s\n", low, path, name);
+						char *abspath = (*name != '/')? r_str_newf ("%s/%s", path, name): strdup (name);
+						RBinDbgItem item = {
+							.addr = low + 1, // XXX this low is wrong, we must add compilation units not addrline
+							.file = abspath,
+							.line = 0,
+							.column = 0,
+						};
+						// TODO: add compilation unit callback here
+						bf->addrline.al_add_cu (&bf->addrline, item);
+						free (abspath);
+					}
+				}
+			}
 		}
 		// build hashtable after whole parsing because of possible relocations
 		if (info) {
@@ -2536,90 +2822,61 @@ cleanup:
 	return NULL;
 }
 
-static RBinDwarfRow *row_new(ut64 addr, const char *file, int line, int col) {
+static RBinDbgItem *row_new(ut64 addr, const char *file, int line, int col) {
 	R_RETURN_VAL_IF_FAIL (file, NULL);
-	RBinDwarfRow *row = R_NEW0 (RBinDwarfRow);
-	if (R_LIKELY (row)) {
-		row->file = strdup (file);
-		row->address = addr;
-		row->line = line;
-		row->column = col;
-	}
+	RBinDbgItem *row = R_NEW0 (RBinDbgItem);
+	row->file = strdup (file);
+	row->addr = addr;
+	row->line = line;
+	row->column = col;
 	return row;
 }
 
 static void row_free(void *p) {
 	if (p) {
-		RBinDwarfRow *row = (RBinDwarfRow*)p;
-		free (row->file);
-		free (row);
+		RBinDbgItem *row = (RBinDbgItem *)p;
+		r_bin_addrline_free (row);
 	}
+}
+
+static bool cb(void *user, RBinDbgItem *item) {
+	RList *list = (RList *)user;
+	RBinDbgItem *row = row_new (item->addr, item->file, item->line, item->column);
+	if (row) {
+		r_list_append (list, row);
+	}
+	return true;
 }
 
 R_API RList *r_bin_dwarf_parse_line(RBin *bin, int mode) {
 	R_RETURN_VAL_IF_FAIL (bin, NULL);
-	ut8 *buf;
 	RList *list = NULL;
-	int len, ret;
+	dwarf_cache_reset ();
 	const bool be = r_bin_is_big_endian (bin);
 	RBinSection *section = getsection (bin, DWARF_SN_LINE);
 	RBinFile *bf = bin->cur;
 	if (bf && section) {
-		len = section->size;
+		int len = section->size;
 		if (len < 1) {
 			return NULL;
 		}
-		buf = calloc (1, len + 1);
+		ut8 *buf = calloc (1, len + 1);
 		if (!buf) {
 			return NULL;
 		}
-		ret = r_buf_read_at (bf->buf, section->paddr, buf, len);
+		int ret = r_buf_read_at (bf->buf, section->paddr, buf, len);
 		if (ret != len) {
 			free (buf);
 			return NULL;
 		}
 		list = r_list_newf (row_free);
-		if (!list) {
-			free (buf);
-			return NULL;
-		}
 		/* set the endianity global [HOTFIX] */
 		// Actually parse the section
 		parse_line_raw (bin, buf, len, mode, be);
-		// k bin/cur/addrinfo/*
-		SdbListIter *iter;
-		SdbKv *kv;
-		SdbList *ls = sdb_foreach_list (bf->sdb_addrinfo, false);
-		// Use the parsed information from _raw and transform it to more useful format
-		ls_foreach (ls, iter, kv) {
-			const char *key = sdbkv_key (kv);
-			if (r_str_startswith (key, "0x")) {
-				char *file = strdup (sdbkv_value (kv));
-				if (!file) {
-					free (buf);
-					ls_free (ls);
-					r_list_free (list);
-					return NULL;
-				}
-				char *tok = strchr (file, '|');
-				if (tok) {
-					*tok++ = 0;
-					int line = atoi (tok);
-					int column = 0;
-					char *tok2 = strchr (tok, '|');
-					if (tok2) {
-						column = atoi (tok2 + 1);
-					}
-					ut64 addr = r_num_get (NULL, key);
-					RBinDwarfRow *row = row_new (addr, file, line, column);
-					if (row) {
-						r_list_append (list, row);
-					}
-				}
-				free (file);
-			}
+		if (bin->cur && bin->cur->addrline.used) {
+			RBinAddrLineStore *als = &bin->cur->addrline;
+			als->al_foreach (als, cb, list);
 		}
-		ls_free (ls);
 		free (buf);
 	}
 	return list;
@@ -2649,6 +2906,7 @@ R_API void r_bin_dwarf_parse_aranges(RBin *bin, int mode) {
 
 R_API RBinDwarfDebugAbbrev *r_bin_dwarf_parse_abbrev(RBin *bin, int mode) {
 	size_t len = 0;
+	dwarf_cache_reset ();
 	ut8 *buf = get_section_bytes (bin, DWARF_SN_ABBREV, &len);
 	if (!buf) {
 		return NULL;

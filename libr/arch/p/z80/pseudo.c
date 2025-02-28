@@ -1,9 +1,7 @@
-/* radare - LGPL - Copyright 2015-2022 - jvoisin */
+/* radare - LGPL - Copyright 2015-2024 - jvoisin */
 
 #include <r_lib.h>
-#include <r_flag.h>
-#include <r_anal.h>
-#include <r_parse.h>
+#include <r_asm.h>
 
 static char *replace(int argc, const char *argv[]) {
 	int i, j;
@@ -62,7 +60,7 @@ static char *replace(int argc, const char *argv[]) {
 	return r_strbuf_drain (sb);
 }
 
-static int parse(RParse *p, const char *data, char *str) {
+static char *parse(RAsmPluginSession *aps, const char *data) {
 	int argc = 0;
 	char *args = strdup (data);
 	args = r_str_replace (args, ",", " ", true);
@@ -71,23 +69,33 @@ static int parse(RParse *p, const char *data, char *str) {
 	char *res = replace (argc, argv);
 	free (args);
 	if (!res) {
-		return false;
+		return NULL;
 	}
-	strcpy (str, res); // XXX
-	free (res);
-	return true;
+	return res;
 }
 
-RParsePlugin r_parse_plugin_z80_pseudo = {
-	.name = "z80.pseudo",
-	.desc = "z80 pseudo syntax",
-	.parse = parse, // parse actually converts the string into asm.pseudo
+#if Z80_IS_GB
+RAsmPlugin r_asm_plugin_gb = {
+	.meta = {
+		.name = "gb",
+		.desc = "GameBoy pseudo syntax",
+	},
+	.parse = parse,
 };
+#else
+RAsmPlugin r_asm_plugin_z80 = {
+	.meta = {
+		.name = "z80",
+		.desc = "Z80 pseudo syntax",
+	},
+	.parse = parse,
+};
+#endif
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_z80_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_z80,
 	.version = R2_VERSION
 };
 #endif

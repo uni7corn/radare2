@@ -15,10 +15,10 @@ EXPECT=<<EOF
 Reassembling 8051... OK
 EOF
 EXPECT_ERR=<<EOF
-WARN: Cannot find asm.parser for 8051.pseudo
+WARN: Cannot find asm.parser for 8051
 INFO: Fallback to null
 WARN: using oba to load the syminfo from different mapaddress
-WARN: Cannot find asm.parser for 8051.pseudo
+WARN: Cannot find asm.parser for 8051
 EOF
 RUN
 
@@ -45,7 +45,7 @@ CMDS=<<EOF
 !!rasm2 -L~4004
 EOF
 EXPECT=<<EOF
-ade 4           i4004       i4004 decoder plugin (by pancake,condret)
+ade 4           i4004       The classic Intel 4004
 EOF
 RUN
 
@@ -523,7 +523,7 @@ CMDS=<<EOF
 !rasm2 -LL | grep -c null
 EOF
 EXPECT=<<EOF
-1
+0
 EOF
 RUN
 
@@ -543,7 +543,7 @@ CMDS=<<EOF
 !!rasm2 -L~arm.gnu?
 EOF
 EXPECT=<<EOF
-20
+4
 1
 EOF
 RUN

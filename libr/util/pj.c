@@ -24,15 +24,13 @@ static void pj_comma(PJ *j) {
 	j->is_key = false;
 }
 
-R_API PJ *pj_new(void) {
+R_API R_NONNULL PJ *pj_new(void) {
 	PJ *j = R_NEW0 (PJ);
-	if (j) {
-		r_strbuf_init (&j->sb);
-		j->is_first = true;
-		j->comma = ",";
-		j->str_encoding = PJ_ENCODING_STR_DEFAULT;
-		j->num_encoding = PJ_ENCODING_NUM_DEFAULT;
-	}
+	r_strbuf_init (&j->sb);
+	j->is_first = true;
+	j->comma = ",";
+	j->str_encoding = PJ_ENCODING_STR_DEFAULT;
+	j->num_encoding = PJ_ENCODING_NUM_DEFAULT;
 	return j;
 }
 
@@ -297,9 +295,9 @@ R_API PJ *pj_n(PJ *j, ut64 n) {
 	pj_comma (j);
 	char numstr[32];
 	if (j->num_encoding == PJ_ENCODING_NUM_STR) {
-		snprintf (numstr, sizeof (numstr), "\"%" PFMT64u "\"", n);
+		snprintf (numstr, sizeof (numstr), "\"%" PFMT64u "\"", (uint64_t)n);
 	} else if (j->num_encoding == PJ_ENCODING_NUM_HEX) {
-		snprintf (numstr, sizeof (numstr), "\"0x%" PFMT64x "\"", n);
+		snprintf (numstr, sizeof (numstr), "\"0x%" PFMT64x "\"", (uint64_t)n);
 	} else {
 		snprintf (numstr, sizeof (numstr), "%" PFMT64u, n);
 	}

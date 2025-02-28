@@ -168,7 +168,10 @@ static RBinInfo *info(RBinFile *bf) {
 static RList *relocs(RBinFile *bf) {
 	R_RETURN_VAL_IF_FAIL (bf && bf->bo, NULL);
 	QnxObj *qo = bf->bo->bin_obj;
-	return r_list_clone (qo->fixups, NULL);
+	if (qo && qo->fixups) {
+		return r_list_clone (qo->fixups, NULL);
+	}
+	return NULL;
 }
 
 static void header(RBinFile *bf) {
@@ -269,6 +272,7 @@ RBinPlugin r_bin_plugin_qnx = {
 		.desc = "QNX executable file support",
 		.license = "LGPL-3.0-only",
 	},
+	.weak_guess = true,
 	.load = &load,
 	.destroy = &destroy,
 	.relocs = &relocs,

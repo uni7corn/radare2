@@ -26,8 +26,8 @@ CWISS_DECLARE_FLAT_HASHMAP_DEFAULT(AdjacencyList, ut64, Edges*);
 
 // NOTE: this is heavy in memory usage, but needed due to performance reasons for large amounts of xrefs..
 typedef struct r_ref_manager_t {
-	AdjacencyList refs;   // forward refs
-	AdjacencyList xrefs;  // backward refs
+	R_ALIGNED(16) AdjacencyList refs;   // forward refs
+	R_ALIGNED(16) AdjacencyList xrefs;  // backward refs
 } RefManager;
 
 static inline int compare_ref(const RAnalRef *a, const RAnalRef *b) {
@@ -275,14 +275,14 @@ R_API bool r_anal_xrefs_set(RAnal *anal, ut64 from, ut64 to, const RAnalRefType 
 	}
 
 	ref_manager_add_entry (anal->rm, from, to, type);
-	R_DIRTY (anal);
+	R_DIRTY_SET (anal);
 	return true;
 }
 
 R_API bool r_anal_xref_del(RAnal *anal, ut64 from, ut64 to) {
 	R_RETURN_VAL_IF_FAIL (anal, false);
 	ref_manager_remove_entry (anal->rm, from, to);
-	R_DIRTY (anal);
+	R_DIRTY_SET (anal);
 	return true;
 }
 
@@ -333,16 +333,15 @@ R_API bool r_anal_xrefs_has_xrefs_at(RAnal *anal, ut64 at) {
 	return !!entry;
 }
 
-static void r_anal_xrefs_list_table(RAnal *anal, RVecAnalRef *anal_refs, const char *arg) {
-	RTable *table = r_table_new ("xrefs");
-	r_table_set_columnsf (table, "ddssss", "from", "to", "type", "perm", "fromname", "toname");
+static void r_anal_xrefs_list_table(RAnal *anal, RVecAnalRef *anal_refs, const char *arg, RTable *table) {
+	if (!table) {
+		table = r_table_new ("xrefs");
+	}
+	r_table_set_columnsf (table, "dddssss", "from", "to", "size", "type", "perm", "fromname", "toname");
 
 	RAnalRef *ref;
 	R_VEC_FOREACH (anal_refs, ref) {
 		int t = R_ANAL_REF_TYPE_MASK (ref->type);
-		if (!t) {
-			t = ' ';
-		}
 		char *fromname = anal->coreb.getNameDelta (anal->coreb.core, ref->addr);
 		char *toname = anal->coreb.getNameDelta (anal->coreb.core, ref->at);
 		r_table_add_rowf (table, "xxnssss",
@@ -361,8 +360,8 @@ static void r_anal_xrefs_list_table(RAnal *anal, RVecAnalRef *anal_refs, const c
 		show_table = r_table_query (table, arg);
 	}
 	if (show_table) {
-		char *s = r_table_tofancystring (table);
-		r_cons_println (s);
+		char *s = r_table_tostring (table);
+		r_cons_print (s);
 		free (s);
 	}
 	r_table_free (table);
@@ -416,13 +415,9 @@ static void r_anal_xrefs_list_json(RAnal *anal, RVecAnalRef *anal_refs) {
 static void r_anal_xrefs_list_hex(RAnal *anal, RVecAnalRef *anal_refs) {
 	RAnalRef *ref;
 	R_VEC_FOREACH (anal_refs, ref) {
-		int t = R_ANAL_REF_TYPE_MASK (ref->type);
-		if (!t) {
-			t = ' ';
-		}
-
+		const int t = R_ANAL_REF_TYPE_MASK (ref->type);
 		// TODO: export/import the read-write-exec information
-		anal->cb_printf ("ax%c 0x%"PFMT64x" 0x%"PFMT64x"\n", t, ref->addr, ref->at);
+		anal->cb_printf ("ax%c 0x%"PFMT64x" 0x%"PFMT64x"\n", t? t: ' ', ref->addr, ref->at);
 	}
 }
 
@@ -430,9 +425,6 @@ static void r_anal_xrefs_list_mapping(RAnal *anal, RVecAnalRef *anal_refs) {
 	RAnalRef *ref;
 	R_VEC_FOREACH (anal_refs, ref) {
 		RAnalRefType t = R_ANAL_REF_TYPE_MASK (ref->type);
-		if (!t) {
-			t = ' ';
-		}
 		anal->cb_printf ("0x%08"PFMT64x" -> 0x%08"PFMT64x"  %s:%s\n", ref->at, ref->addr,
 			r_anal_ref_type_tostring (t), r_anal_ref_perm_tostring (ref));
 	}
@@ -469,7 +461,7 @@ static void r_anal_xrefs_list_plaintext(RAnal *anal, RVecAnalRef *anal_refs) {
 	}
 }
 
-R_API void r_anal_xrefs_list(RAnal *anal, int rad, const char *arg) {
+R_API void r_anal_xrefs_list(RAnal *anal, int rad, const char *arg, RTable *t) {
 	R_RETURN_IF_FAIL (anal && anal->rm);
 
 	RVecAnalRef *anal_refs = ref_manager_get_refs (anal->rm, UT64_MAX);
@@ -482,7 +474,7 @@ R_API void r_anal_xrefs_list(RAnal *anal, int rad, const char *arg) {
 
 	switch (rad) {
 	case ',':
-		r_anal_xrefs_list_table (anal, anal_refs, arg);
+		r_anal_xrefs_list_table (anal, anal_refs, arg, t);
 		break;
 	case 'j':
 		r_anal_xrefs_list_json (anal, anal_refs);
@@ -495,6 +487,7 @@ R_API void r_anal_xrefs_list(RAnal *anal, int rad, const char *arg) {
 		break;
 	case '\0':
 		r_anal_xrefs_list_plaintext (anal, anal_refs);
+		break;
 	default:
 		R_LOG_DEBUG ("Unsupported xrefs list format: %c", rad);
 		break;
@@ -574,6 +567,8 @@ R_API char r_anal_ref_perm_tochar(RAnalRef *ref) {
 		return 'x';
 	}
 	switch (R_ANAL_REF_TYPE_MASK (ref->type)) {
+	case R_ANAL_REF_TYPE_STRN:
+		return 'r';
 	case R_ANAL_REF_TYPE_CODE:
 	case R_ANAL_REF_TYPE_CALL:
 	case R_ANAL_REF_TYPE_JUMP:
@@ -583,7 +578,7 @@ R_API char r_anal_ref_perm_tochar(RAnalRef *ref) {
 }
 
 R_API const char *r_anal_ref_perm_tostring(RAnalRef *ref) {
-	int perm = R_ANAL_REF_TYPE_PERM (ref->type);
+	ut32 perm = R_ANAL_REF_TYPE_PERM (ref->type);
 	if (!perm) {
 		switch (R_ANAL_REF_TYPE_MASK (ref->type)) {
 		case R_ANAL_REF_TYPE_CODE:
@@ -612,7 +607,6 @@ R_API int r_anal_ref_size(RAnalRef *ref) {
 
 R_API const char *r_anal_ref_type_tostring(RAnalRefType type) {
 	switch (R_ANAL_REF_TYPE_MASK (type)) {
-	case ' ':
 	case R_ANAL_REF_TYPE_NULL:
 		return "NULL";
 	case R_ANAL_REF_TYPE_ICOD:
@@ -628,11 +622,12 @@ R_API const char *r_anal_ref_type_tostring(RAnalRefType type) {
 	case R_ANAL_REF_TYPE_STRN:
 		return "STRN";
 	default:
-		// R_LOG_ERROR("Invalid unknown ref type %c", R_ANAL_REF_TYPE_MASK (type));
+		// R_LOG_ERROR ("Invalid unknown ref type %c", R_ANAL_REF_TYPE_MASK (type));
 		return "UNKN";
 	}
 }
 
+// UNUSED
 R_API RAnalRefType r_anal_xrefs_type_from_string(const char *s) {
 	RAnalRefType rt = R_ANAL_REF_TYPE_NULL;
 	if (strchr (s, 'r')) {

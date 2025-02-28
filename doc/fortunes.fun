@@ -355,3 +355,6 @@ Press the button again.
 It's been a long time.
 Relic malfunction detected.
 You are offline. Some functionality may be unavailable.
+Patching instructions should be illegal
+Are you still watching?
+Downloading update 1 of 1 ...

@@ -110,8 +110,9 @@ static int __read(RIO *io, RIODesc *desc, ut8 *buf, int len) {
 		ret = lseek (fd, addr, SEEK_SET);
 		if (ret >= 0) {
 			// Workaround for the buggy Debian Wheeze's /proc/pid/mem
-			if (read (fd, buf, len) != -1) {
-				return ret;
+			ssize_t res = read (fd, buf, len);
+			if (res != -1) {
+				return res;
 			}
 		}
 	}
@@ -124,7 +125,7 @@ static int __read(RIO *io, RIODesc *desc, ut8 *buf, int len) {
 				len + sizeof (ptrace_word), aligned_addr);
 		memcpy (buf, aligned_buf + aligned_delta, len);
 		r_free_aligned (aligned_buf);
-		return res;
+		return R_MIN (len, res);
 	}
 	return -1;
 }
@@ -272,7 +273,8 @@ static ut64 __lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 		io->off += offset;
 		break;
 	case R_IO_SEEK_END:
-		io->off = ST64_MAX;
+		io->off = UT64_MAX;
+		break;
 	}
 	return io->off;
 }
@@ -298,6 +300,7 @@ static void show_help(void) {
 	eprintf ("Usage: :cmd args\n"
 		" :ptrace   - use ptrace io\n"
 		" :mem      - use /proc/pid/mem io if possible\n"
+		" :tls      - find the thread local storage address\n"
 		" :pid      - show targeted pid\n"
 		" :pid <#>  - select new pid\n");
 }
@@ -311,6 +314,13 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 	}
 	if (!strcmp (cmd, "help")) {
 		show_help ();
+	} else if (!strcmp (cmd, "tls")) {
+#if __x86_64__
+		RCore *core = io->coreb.core;
+		io->coreb.cmd (core, "dxr 64488b042500000000");
+#else
+		R_LOG_TODO ("Not implemented for this architecture");
+#endif
 	} else if (!strcmp (cmd, "ptrace")) {
 		close_pidmem (iop);
 	} else if (!strcmp (cmd, "mem")) {
@@ -324,10 +334,11 @@ static char *__system(RIO *io, RIODesc *fd, const char *cmd) {
 					// TODO: do not set pid if attach fails?
 					iop->pid = iop->tid = pid;
 				}
+				return NULL;
 			} else {
-				io->cb_printf ("%d\n", iop->pid);
+				return r_str_newf ("%d", iop->pid);
+				// io->cb_printf ("%d\n", iop->pid);
 			}
-			return r_str_newf ("%d", iop->pid);
 		}
 	} else {
 		show_help ();

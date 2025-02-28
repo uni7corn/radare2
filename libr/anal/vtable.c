@@ -286,7 +286,7 @@ R_API RList *r_anal_vtable_search(RVTableContext *context) {
 	return vtables;
 }
 
-R_API void r_anal_list_vtables(RAnal *anal, int rad) {
+R_API void r_anal_vtables_list(RAnal *anal, int rad) {
 	RVTableContext context = {0};
 	r_anal_vtable_begin (anal, &context);
 
@@ -299,9 +299,6 @@ R_API void r_anal_list_vtables(RAnal *anal, int rad) {
 
 	if (rad == 'j') {
 		PJ *pj = pj_new ();
-		if (!pj) {
-			return;
-		}
 		pj_a (pj);
 		r_list_foreach (vtables, vtableIter, table) {
 			pj_o (pj);

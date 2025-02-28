@@ -43,10 +43,9 @@ NAME=DEX dex38.dex ie command
 FILE=bins/dex/dex38.dex
 CMDS=ie
 EXPECT=<<EOF
-[Entrypoints]
-vaddr=0x00001378 paddr=0x00001378 haddr=-1 type=program
-
-1 entrypoints
+paddr      vaddr      phaddr     vhaddr     type
+------------------------------------------------
+0x00001378 0x00001378 ---------- ---------- program
 EOF
 RUN
 
@@ -207,7 +206,6 @@ NAME=DEX HelloWorld.dex imports (ii command)
 FILE=bins/dex/HelloWorld.dex
 CMDS=ii
 EXPECT=<<EOF
-[Imports]
 nth vaddr      bind type lib name
 ---------------------------------
 0   0x000001b0 NONE FUNC     Ljava/io/PrintStream.method.println(Ljava/lang/String;)V
@@ -217,7 +215,6 @@ nth vaddr      bind type lib name
 4   0x000001d0 NONE FUNC     Ljava/lang/StringBuilder.method.<init>()V
 5   0x000001d8 NONE FUNC     Ljava/lang/StringBuilder.method.append(Ljava/lang/String;)Ljava/lang/StringBuilder;
 6   0x000001e0 NONE FUNC     Ljava/lang/StringBuilder.method.toString()Ljava/lang/String;
-
 EOF
 RUN
 
@@ -225,7 +222,6 @@ NAME=DEX HelloWorld.dex exports (iE command)
 FILE=bins/dex/HelloWorld.dex
 CMDS=iE
 EXPECT=<<EOF
-[Exports]
 nth paddr      vaddr      bind   type size lib name                                     demangled
 -------------------------------------------------------------------------------------------------
 2   0x00000238 0x00000238 GLOBAL FUNC 20       LHello.method.<init>()V
@@ -285,53 +281,13 @@ addr: 0x00000318
 68
 --
 file: Hello.java
-line: 10
-colu: 0
-addr: 0x000002b1
-file: Hello.java
-line: 15
-colu: 0
-addr: 0x00000263
-file: Hello.java
-line: 9
-colu: 0
-addr: 0x00000290
-file: World.java
-line: 7
-colu: 0
-addr: 0x000002fa
-file: Hello.java
 line: 4
 colu: 0
 addr: 0x00000238
-file: World.java
-line: 8
-colu: 0
-addr: 0x000002fd
 file: Hello.java
-line: 17
-colu: 0
-addr: 0x0000026c
-file: World.java
-line: 11
-colu: 0
-addr: 0x00000318
-file: Hello.java
-line: 14
-colu: 0
-addr: 0x0000025c
-file: World.java
 line: 5
 colu: 0
-addr: 0x000002f4
-file: World.java
-line: 12
-colu: 0
-addr: 0x00000339
-file: World.java
-line: 6
-colu: 0
-addr: 0x000002f7
+addr: 0x0000023b
 file: Hello.java
 line: 6
 colu: 0
@@ -341,17 +297,57 @@ line: 7
 colu: 0
 addr: 0x00000241
 file: Hello.java
-line: 5
+line: 14
 colu: 0
-addr: 0x0000023b
+addr: 0x0000025c
+file: Hello.java
+line: 15
+colu: 0
+addr: 0x00000263
 file: Hello.java
 line: 16
 colu: 0
 addr: 0x00000268
 file: Hello.java
+line: 17
+colu: 0
+addr: 0x0000026c
+file: Hello.java
+line: 9
+colu: 0
+addr: 0x00000290
+file: Hello.java
+line: 10
+colu: 0
+addr: 0x000002b1
+file: Hello.java
 line: 11
 colu: 0
 addr: 0x000002b9
+file: World.java
+line: 5
+colu: 0
+addr: 0x000002f4
+file: World.java
+line: 6
+colu: 0
+addr: 0x000002f7
+file: World.java
+line: 7
+colu: 0
+addr: 0x000002fa
+file: World.java
+line: 8
+colu: 0
+addr: 0x000002fd
+file: World.java
+line: 11
+colu: 0
+addr: 0x00000318
+file: World.java
+line: 12
+colu: 0
+addr: 0x00000339
 EOF
 RUN
 

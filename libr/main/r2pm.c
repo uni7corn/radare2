@@ -27,6 +27,7 @@ static const char *helpmsg =
 	" -l                list installed packages\n"
 	" -q                be quiet\n"
 	" -r [cmd ...args]  run shell command with R2PM_BINDIR in PATH\n"
+	" -R <pkgname>      reload plugin (See R2PM_RELOAD code block package)\n"
 	" -s [<keyword>]    search available packages in database matching a string\n"
 	" -t [YYYY-MM-DD]   set a moment in time to pull the code from the git packages\n"
 	" -u <pkgname>      uninstall package (see -f to force uninstall)\n"
@@ -53,6 +54,7 @@ typedef struct r_r2pm_t {
 	bool quiet;
 	bool run;
 	bool search;
+	bool reload;
 	bool uninstall;
 	bool upgrade;
 	bool version;
@@ -427,6 +429,10 @@ static void r2pm_setenv(R2Pm *r2pm) {
 	char *bindir = r_str_newf ("%s/bin", r2_prefix);
 	r_sys_setenv ("R2PM_BINDIR", bindir);
 	free (bindir);
+
+	char *mandir = r_str_newf ("%s/man", r2_prefix);
+	r_sys_setenv("R2PM_MANDIR", mandir);
+	free (mandir);
 
 	char *libdir = r_str_newf ("%s/lib", r2_prefix);
 	r_sys_setenv ("R2PM_LIBDIR", libdir);
@@ -1097,6 +1103,7 @@ static void r2pm_envhelp(void) {
 	int r2pm_log_level = r_sys_getenv_asint ("R2_LOG_LEVEL");
 	char *r2pm_plugdir = r_sys_getenv ("R2PM_PLUGDIR");
 	char *r2pm_bindir = r_sys_getenv ("R2PM_BINDIR");
+	char *r2pm_mandir = r_sys_getenv ("R2PM_MANDIR");
 	char *r2pm_libdir = r_sys_getenv ("R2PM_LIBDIR");
 	char *r2pm_dbdir = r_sys_getenv ("R2PM_DBDIR");
 	char *r2pm_prefix = r_sys_getenv ("R2PM_PREFIX");
@@ -1114,6 +1121,7 @@ static void r2pm_envhelp(void) {
 		"R2PM_PLUGDIR=%s (global)\n"
 		"R2PM_PREFIX=%s\n"
 		"R2PM_BINDIR=%s\n"
+		"R2PM_MANDIR=%s\n"
 		"R2PM_LIBDIR=%s\n"
 		"R2PM_DBDIR=%s\n"
 		"R2PM_GITDIR=%s\n"
@@ -1124,6 +1132,7 @@ static void r2pm_envhelp(void) {
 		r2pm_plugdir2,
 		r2pm_prefix,
 		r2pm_bindir,
+		r2pm_mandir,
 		r2pm_libdir,
 		r2pm_dbdir,
 		r2pm_gitdir,
@@ -1132,6 +1141,7 @@ static void r2pm_envhelp(void) {
 	free (r2pm_plugdir2);
 	free (r2pm_prefix);
 	free (r2pm_bindir);
+	free (r2pm_mandir);
 	free (r2pm_dbdir);
 	free (r2pm_gitdir);
 	free (r2pm_giturl);
@@ -1177,7 +1187,7 @@ R_API int r_main_r2pm(int argc, const char **argv) {
 		0
 	};
 	RGetopt opt;
-	r_getopt_init (&opt, argc, argv, "aqecdiIhH:flgrpst:uUv");
+	r_getopt_init (&opt, argc, argv, "aqecdiIhH:flgrRpst:uUv");
 	int i, c;
 	bool action = false;
 	// -H option without argument
@@ -1242,6 +1252,10 @@ R_API int r_main_r2pm(int argc, const char **argv) {
 			break;
 		case 't':
 			r2pm.time = opt.arg;
+			break;
+		case 'R':
+			r2pm.reload = true;
+			action = true;
 			break;
 		case 'r':
 			r2pm.run = true;
@@ -1380,6 +1394,22 @@ R_API int r_main_r2pm(int argc, const char **argv) {
 			res = 0;
 		} else {
 			res = 1;
+		}
+	}
+	if (r2pm.reload) {
+		RListIter *iter;
+		const char *pkg;
+		r_list_foreach (targets, iter, pkg) {
+			char *s = r2pm_get (pkg, "\nR2PM_RELOAD() {", TT_CODEBLOCK);
+			if (s) {
+				char *t = r_str_trim_lines (s);
+				r_cons_print (t);
+				free (t);
+				free (s);
+			}
+		}
+		if (havetoflush) {
+			r_cons_flush ();
 		}
 	}
 	r_list_free (targets);

@@ -1,10 +1,10 @@
 /* radare - LGPL - Copyright 2015-2024 - pancake */
 
-#include <r_parse.h>
+#include <r_asm.h>
 
-static int replace(int argc, const char *argv[], char *newstr) {
+static char *replace(int argc, const char *argv[]) {
 #define MAXPSEUDOOPS 10
-	int i, j, k, d;
+	int i, j, d;
 	char ch;
 	struct {
 		int narg;
@@ -158,10 +158,7 @@ static int replace(int argc, const char *argv[], char *newstr) {
 		{ 0, "push.w", "push #", { 1 } },
 		{ 0, NULL }
 	};
-	if (!newstr) {
-		return false;
-	}
-
+	RStrBuf *sb = r_strbuf_new ("");
 	for (i = 0; ops[i].op; i++) {
 		if (ops[i].narg) {
 			if (argc - 1 != ops[i].narg) {
@@ -169,65 +166,56 @@ static int replace(int argc, const char *argv[], char *newstr) {
 			}
 		}
 		if (!strcmp (ops[i].op, argv[0])) {
-			if (newstr) {
-				d = 0;
-				j = 0;
+			d = 0;
+			j = 0;
+			ch = ops[i].str[j];
+			for (j = 0; ch != '\0'; j++) {
 				ch = ops[i].str[j];
-				for (j = 0, k = 0; ch != '\0'; j++, k++) {
-					ch = ops[i].str[j];
-					if (ch == '#') {
-						if (d >= MAXPSEUDOOPS) {
-							// XXX Shouldn't ever happen...
-							continue;
-						}
-						int idx = ops[i].args[d];
-						d++;
-						if (idx <= 0) {
-							// XXX Shouldn't ever happen...
-							continue;
-						}
-						const char *w = argv[idx];
-						if (w) {
-							strcpy (newstr + k, w);
-							k += strlen (w) - 1;
-						}
-					} else {
-						newstr[k] = ch;
+				if (ch == '#') {
+					if (d >= MAXPSEUDOOPS) {
+						// XXX Shouldn't ever happen...
+						continue;
 					}
+					int idx = ops[i].args[d];
+					d++;
+					if (idx <= 0) {
+						// XXX Shouldn't ever happen...
+						continue;
+					}
+					const char *w = argv[idx];
+					if (w) {
+						r_strbuf_append (sb, w);
+					}
+				} else {
+					r_strbuf_append_n (sb, &ch, 1);
 				}
-				newstr[k] = '\0';
 			}
-
-			r_str_replace_char (newstr, '{', '(');
-			r_str_replace_char (newstr, '}', ')');
-			return true;
+			goto fin;
 		}
 	}
 
 	/* TODO: this is slow */
-	newstr[0] = '\0';
 	for (i = 0; i < argc; i++) {
-		strcat (newstr, argv[i]);
-		strcat (newstr, (!i || i == argc - 1)? " " : ",");
+		r_strbuf_append (sb, argv[i]);
+		r_strbuf_append (sb, (!i || i == argc - 1)? " " : ",");
 	}
+fin:;
+	char *newstr = r_strbuf_drain (sb);
 	r_str_replace_char (newstr, '{', '(');
 	r_str_replace_char (newstr, '}', ')');
-	return false;
+	return newstr;
 }
 
-static int parse(RParse *p, const char *data, char *str) {
+static char *parse(RAsmPluginSession *aps, const char *data) {
 	char w0[256], w1[256], w2[256], w3[256], w4[256];
-	int i, len = strlen (data);
-	char *buf, *ptr, *optr;
+	char *ptr, *optr;
+	int i;
 
-	if (len >= sizeof (w0)) {
-		return false;
+	if (strlen (data) >= sizeof (w0)) {
+		return NULL;
 	}
-	// malloc can be slow here :?
-	if (!(buf = malloc (len + 1))) {
-		return false;
-	}
-	memcpy (buf, data, len + 1);
+	char *buf = strdup (data);
+	char *s = NULL;
 	if (*buf) {
 		*w0 = *w1 = *w2 = *w3 = *w4 = '\0';
 		ptr = strchr (buf, ' ');
@@ -252,7 +240,7 @@ static int parse(RParse *p, const char *data, char *str) {
 			if (!ptr) {
 				R_LOG_ERROR ("Unbalanced bracket");
 				free (buf);
-				return false;
+				return NULL;
 			}
 			ptr = strchr (ptr, ',');
 			if (ptr) {
@@ -286,10 +274,9 @@ static int parse(RParse *p, const char *data, char *str) {
 					nw++;
 				}
 			}
-			replace (nw, wa, str);
+			s = replace (nw, wa);
 		}
 	}
-	char *s = strdup (str);
 	if (s) {
 		s = r_str_replace (s, "xzr", "0", 1);
 		s = r_str_replace (s, "wzr", "0", 1);
@@ -297,12 +284,10 @@ static int parse(RParse *p, const char *data, char *str) {
 		s = r_str_replace (s, " lsr ", " >> ", 1);
 		s = r_str_replace (s, "+ -", "- ", 1);
 		s = r_str_replace (s, "- -", "+ ", 1);
-		strcpy (str, s);
-		free (s);
+		s = r_str_fixspaces (s);
 	}
 	free (buf);
-	r_str_fixspaces (str);
-	return true;
+	return s;
 }
 
 static char *subs_var_string(RParse *p, RAnalVarField *var, char *tstr, const char *oldstr, const char *reg, int delta) {
@@ -341,7 +326,6 @@ static char *mount_oldstr(RParse* p, const char *reg, st64 delta, bool ucase) {
 	} else {
 		tmplt = p->pseudo ? "%s - 0x%x" : (ucase ? "%s, -0x%X" : "%s, -0x%x");
 		oldstr = r_str_newf (tmplt, reg, -delta);
-		// oldstr = r_str_newf ("%d", -delta); // tmplt, reg, -delta);
 	}
 	if (ucase) {
 		char *comma = strchr (oldstr, ',');
@@ -354,12 +338,219 @@ static char *mount_oldstr(RParse* p, const char *reg, st64 delta, bool ucase) {
 	return oldstr;
 }
 
-static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len) {
-	R_RETURN_VAL_IF_FAIL (p, false);
+static char *r_core_hack_arm64(RAsmPluginSession *s, RAnalOp *aop, const char *op) {
+	const char *cmd = NULL;
+	if (!strcmp (op, "nop")) {
+		cmd = "wx 1f2003d5";
+	} else if (!strcmp (op, "ret")) {
+		cmd = "wx c0035fd6t";
+	} else if (!strcmp (op, "trap")) {
+		cmd = "wx 000020d4";
+	} else if (!strcmp (op, "jz") || !strcmp (op, "je")) {
+		R_LOG_ERROR ("ARM jz hack not supported");
+	} else if (!strcmp (op, "jinf")) {
+		cmd = "wx 00000014";
+	} else if (!strcmp (op, "jnz") || !strcmp (op, "jne")) {
+		R_LOG_ERROR ("ARM jnz hack not supported");
+	} else if (!strcmp (op, "nocj")) {
+		R_LOG_ERROR ("ARM jnz hack not supported");
+	} else if (!strcmp (op, "recj")) {
+		if (aop->size < 4) {
+			R_LOG_ERROR ("can't fit 4 bytes in here");
+			return NULL;
+		}
+		const ut8 *buf = aop->bytes;
+		if (!buf) {
+			buf = aop->bytes_buf;
+			if (!buf) {
+				R_LOG_DEBUG ("aop->bytes[0] == 0");
+				return NULL;
+			}
+		}
+		if (!*buf) {
+			R_LOG_DEBUG ("aop->bytes[0] == 0");
+		}
+		switch (*buf) {
+		case 0x4c: // bgt -> ble
+			cmd = "wx 4d";
+			break;
+		case 0x4d: // ble -> bgt
+			cmd = "wx 4c";
+			break;
+		default:
+			switch (buf[3]) {
+			case 0x36: // tbz
+				cmd = "wx 37 @ $$+3";
+				break;
+			case 0x37: // tbnz
+				cmd = "wx 36 @ $$+3";
+				break;
+			case 0x34: // cbz
+			case 0xb4: // cbz
+				cmd = "wx 35 @ $$+3";
+				break;
+			case 0x35: // cbnz
+				cmd = "wx b4 @ $$+3";
+				break;
+			}
+			break;
+		}
+	} else if (!strcmp (op, "ret1")) {
+		cmd = "'wa mov x0, 1,,ret";
+	} else if (!strcmp (op, "ret0")) {
+		cmd = "'wa mov x0, 0,,ret";
+	} else if (!strcmp (op, "retn")) {
+		cmd = "'wa mov x0, -1,,ret";
+	}
+	if (cmd) {
+		return strdup (cmd);
+	}
+	return NULL;
+}
+
+static char *r_core_hack_arm(RAsmPluginSession *s, RAnalOp *aop, const char *op) {
+	const int bits = s->rasm->config->bits;
+	const ut8 *b = aop->bytes;
+	char *hcmd = NULL;
+	const char *cmd = NULL;
+
+	if (!strcmp (op, "nop")) {
+		const int nopsize = (bits == 16)? 2: 4;
+		const char *nopcode = (bits == 16)? "00bf":"0000a0e1";
+		const int len = aop->size;
+		int i;
+
+		if (len % nopsize) {
+			R_LOG_ERROR ("Invalid nopcode size");
+			return false;
+		}
+		hcmd = calloc (len + 8, 2);
+		if (R_LIKELY (hcmd)) {
+			strcpy (hcmd, "wx ");
+			int n = 3;
+			for (i = 0; i < len; i += nopsize) {
+				memcpy (hcmd + n + i * 2, nopcode, nopsize * 2);
+			}
+			hcmd[n + (len * 2)] = '\0';
+			cmd = hcmd;
+		}
+	} else if (!strcmp (op, "jinf")) {
+		hcmd = r_str_newf ("wx %s", (bits==16)? "fee7": "feffffea");
+		cmd = hcmd;
+	} else if (!strcmp (op, "trap")) {
+		const char* trapcode = (bits==16)? "bebe": "fedeffe7";
+		hcmd = r_str_newf ("wx %s", trapcode);
+		cmd = hcmd;
+	} else if (!strcmp (op, "jz") || !strcmp (op, "je")) {
+		if (bits == 16) {
+			switch (b[1]) {
+			case 0xb9: // CBNZ
+				cmd = "wx b1 @ $$+1"; //CBZ
+				break;
+			case 0xbb: // CBNZ
+				cmd = "wx b3 @ $$+1"; //CBZ
+				break;
+			case 0xd1: // BNE
+				cmd = "wx d0 @ $$+1"; //BEQ
+				break;
+			default:
+				R_LOG_ERROR ("Current opcode is not conditional");
+				return NULL;
+			}
+		} else {
+			R_LOG_ERROR ("ARM jz hack not supported");
+			return NULL;
+		}
+	} else if (!strcmp (op, "jnz") || !strcmp (op, "jne")) {
+		if (bits == 16) {
+			switch (b[1]) {
+			case 0xb1: // CBZ
+				cmd = "wx b9 @ $$+1"; //CBNZ
+				break;
+			case 0xb3: // CBZ
+				cmd = "wx bb @ $$+1"; //CBNZ
+				break;
+			case 0xd0: // BEQ
+				cmd = "wx d1 @ $$+1"; //BNE
+				break;
+			default:
+				R_LOG_ERROR ("Current opcode is not conditional");
+				return NULL;
+			}
+		} else {
+			R_LOG_ERROR ("ARM jnz hack not supported");
+			return NULL;
+		}
+	} else if (!strcmp (op, "nocj")) {
+		// TODO: drop conditional bit instead of that hack
+		if (bits == 16) {
+			switch (b[1]) {
+			case 0xb1: // CBZ
+			case 0xb3: // CBZ
+			case 0xd0: // BEQ
+			case 0xb9: // CBNZ
+			case 0xbb: // CBNZ
+			case 0xd1: // BNE
+				cmd = "wx e0 @ $$+1"; //BEQ
+				break;
+			default:
+				R_LOG_ERROR ("Current opcode is not conditional");
+				return NULL;
+			}
+		} else {
+			R_LOG_ERROR ("ARM un-cjmp hack not supported");
+			return NULL;
+		}
+	} else if (!strcmp (op, "recj")) {
+		R_LOG_ERROR ("TODO: use jnz or jz");
+		return false;
+	} else if (!strcmp (op, "ret1")) {
+		if (bits == 16) {
+			cmd = "wx 01207047"; // mov r0, 1; bx lr
+		} else {
+			cmd = "wx 0100b0e31eff2fe1"; // movs r0, 1; bx lr
+		}
+	} else if (!strcmp (op, "ret0")) {
+		if (bits == 16) {
+			cmd = "wx 00207047"; // mov r0, 0; bx lr
+		} else {
+			cmd = "wx 0000a0e31eff2fe1"; // movs r0, 0; bx lr
+		}
+	} else if (!strcmp (op, "retn")) {
+		if (bits == 16) {
+			cmd = "wx ff207047"; // mov r0, -1; bx lr
+		} else {
+			cmd = "wx ff00a0e31eff2fe1"; // movs r0, -1; bx lr
+		}
+	} else {
+		R_LOG_ERROR ("Invalid operation");
+		return NULL;
+	}
+	if (hcmd) {
+		return hcmd;
+	}
+	if (cmd) {
+		return strdup (cmd);
+	}
+	free (hcmd);
+	return NULL;
+}
+
+static char *patch(RAsmPluginSession *s, RAnalOp *aop, const char *op) {
+	if (s->rasm->config->bits == 64) {
+		return r_core_hack_arm64 (s, aop, op);
+	}
+	return r_core_hack_arm (s, aop, op);
+}
+
+static char *subvar(RAsmPluginSession *s, RAnalFunction *f, ut64 addr, int oplen, const char *data) {
+	R_RETURN_VAL_IF_FAIL (s, false);
+	RAsm *a = s->rasm;
+	RParse *p = a->parse;
 	RList *spargs = NULL;
 	RList *bpargs = NULL;
 	RListIter *iter;
-	RAnal *anal = p->analb.anal;
+	RAnal *anal = a->analb.anal;
 	char *oldstr;
 	bool newstack = anal->opt.var_newstack;
 	char *tstr = strdup (data);
@@ -421,7 +612,7 @@ static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data
 					reg = p->get_reg_at (f, var->delta, addr);
 				}
 				if (!reg) {
-					reg = anal->reg->name[R_REG_NAME_BP];
+					reg = anal->reg->alias[R_REG_ALIAS_BP];
 				}
 				oldstr = mount_oldstr (p, reg, delta, ucase);
 				if (strstr (tstr, oldstr)) {
@@ -458,7 +649,7 @@ static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data
 					reg = p->get_reg_at (f, delta, addr);
 				}
 				if (!reg) {
-					reg = anal->reg->name[R_REG_NAME_SP];
+					reg = anal->reg->alias[R_REG_ALIAS_SP];
 				}
 				oldstr = mount_oldstr (p, reg, delta, ucase);
 				if (strstr (tstr, oldstr)) {
@@ -472,28 +663,25 @@ static bool subvar(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data
 		r_list_free (bpargs);
 		r_list_free (spargs);
 	}
-	if (len > strlen (tstr)) {
-		strcpy  (str, tstr);
-	} else {
-		// TOO BIG STRING CANNOT REPLACE HERE
-		free (tstr);
-		return false;
-	}
-	free (tstr);
-	return true;
+	return tstr;
 }
 
-RParsePlugin r_parse_plugin_arm_pseudo = {
-	.name = "arm.pseudo",
-	.desc = "ARM/ARM64 pseudo syntax",
+RAsmPlugin r_asm_plugin_arm = {
+	.meta = {
+		.name = "arm",
+		.desc = "ARM/ARM64 pseudo syntax",
+		.author = "pancake",
+		.license = "LGPL-3.0-only",
+	},
 	.parse = parse,
-	.subvar = &subvar,
+	.subvar = subvar,
+	.patch = patch
 };
 
 #ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
-	.type = R_LIB_TYPE_PARSE,
-	.data = &r_parse_plugin_arm_pseudo,
+	.type = R_LIB_TYPE_ASM,
+	.data = &r_asm_plugin_arm,
 	.version = R2_VERSION
 };
 #endif

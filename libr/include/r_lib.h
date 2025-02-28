@@ -48,11 +48,11 @@ typedef struct r_plugin_meta_t {
 	char *author;
 	char *version;
 	char *license;
-// char *contact // email/mastodon/addr
-// char *copyright // 2024-2025 ..?
+	char *contact; // email/mastodon/addr
+	char *copyright; // 2024-2025 ..?
 	RPluginStatus status;
 } RPluginMeta;
-// rename to RLibPluginMeta ?
+// R2_600 discuss rename to RLibPluginMeta ?
 
 /* store list of loaded plugins */
 typedef struct r_lib_plugin_t {
@@ -62,9 +62,7 @@ typedef struct r_lib_plugin_t {
 	struct r_lib_handler_t *handler;
 	void *dl_handler; // DL HANDLER
 	void (*free)(void *data);
-#if 0
-	RPluginMeta meta;
-#endif
+	char *name; // From the RPluginMeta's name
 } RLibPlugin;
 
 /* store list of initialized plugin handlers */
@@ -95,7 +93,7 @@ enum {
 	R_LIB_TYPE_LANG,    /* language */
 	R_LIB_TYPE_ASM,     /* assembler */
 	R_LIB_TYPE_ANAL,    /* analysis */
-	R_LIB_TYPE_PARSE,   /* parsers */
+	// DEPRECATED R_LIB_TYPE_PARSE,   /* parsers */
 	R_LIB_TYPE_BIN,     /* bin headers */
 	R_LIB_TYPE_BIN_XTR, /* bin extractors */
 	R_LIB_TYPE_BIN_LDR, /* bin loaders */
@@ -111,7 +109,6 @@ enum {
 	R_LIB_TYPE_LAST
 };
 
-typedef int (*RLibLifeCycleCallback)(RLibPlugin *, void *, void *);
 
 typedef struct r_lib_t {
 	/* linked list with all the plugin handler */
@@ -151,6 +148,9 @@ R_API int r_lib_close(RLib *lib, const char *file);
 
 R_API const char *r_lib_types_get(int idx);
 R_API int r_lib_types_get_i(const char *str);
+
+#include <r_util/pj.h>
+R_API void r_lib_meta_pj(PJ *pj, const RPluginMeta *meta);
 #endif
 
 #ifdef __cplusplus

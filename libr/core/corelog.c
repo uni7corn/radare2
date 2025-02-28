@@ -72,9 +72,6 @@ R_API int r_core_log_list(RCore *core, int n, int nth, char fmt) {
 
 R_API RCoreLog *r_core_log_new(void) {
 	RCoreLog *log = R_NEW0 (RCoreLog);
-	if (!log) {
-		return NULL;
-	}
 	r_core_log_init (log);
 	return log;
 }
@@ -83,7 +80,7 @@ R_API void r_core_log_init(RCoreLog *log) {
 	R_RETURN_IF_FAIL (log);
 	log->first = 1;
 	log->last = 1;
-	log->sp = r_strpool_new (0);
+	log->sp = r_strpool_new ();
 }
 
 R_API void r_core_log_free(RCoreLog *log) {
@@ -123,7 +120,7 @@ R_API char *r_core_log_get(RCore *core, int index) {
 		char *url = index > 0
 			? r_str_newf ("%s/cmd/T%%20%d", host, index)
 			: r_str_newf ("%s/cmd/T", host);
-		char *res = r_socket_http_get (url, NULL, NULL);
+		char *res = r_socket_http_get (url, NULL, NULL, NULL);
 		free (url);
 		return res? res: strdup ("");
 	}
@@ -165,7 +162,6 @@ R_API void r_core_log_del(RCore *core, int n) {
 		}
 		core->log->first += idx + 1;
 		char *msg = r_strpool_get_i (core->log->sp, idx);
-		// if (idx >= core->log->last) {
 		if (R_STR_ISEMPTY (msg)) {
 			core->log->first = core->log->last;
 			r_strpool_empty (core->log->sp);

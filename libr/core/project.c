@@ -328,7 +328,6 @@ static bool r_core_project_load(RCore *core, const char *prj_name, const char *r
 		//check if the project uses git
 		Rvc *vc = rvc_open (prj_path, RVC_TYPE_GIT);
 		core->prj->rvc = vc;
-		free (prj_path);
 	} else {
 		R_LOG_ERROR ("Failed to load rvc");
 	}
@@ -338,6 +337,7 @@ static bool r_core_project_load(RCore *core, const char *prj_name, const char *r
 		r_line_hist_load (file);
 		free (file);
 	}
+	free (prj_path);
 	r_config_set_b (core->config, "cfg.fortunes", cfg_fortunes);
 	r_config_set_b (core->config, "scr.interactive", scr_interactive);
 	r_config_set_b (core->config, "scr.prompt", scr_prompt);
@@ -560,9 +560,9 @@ R_API bool r_core_project_save_script(RCore *core, const char *file, int opts) {
 		flush (sb);
 	}
 #if PROJECT_EXPERIMENTAL
-	if (opts & R_CORE_PRJ_IO_MAPS && core->io && core->io->files) {
+	if (opts & R_CORE_PRJ_IO_MAPS && core->io) {
 		fdc = 3;
-		r_id_storage_foreach (core->io->files, (RIDStorageForeachCb)store_files_and_maps, core);
+		r_id_storage_foreach (&core->io->files, (RIDStorageForeachCb)store_files_and_maps, core);
 		flush (sb);
 	}
 #endif
@@ -572,7 +572,7 @@ R_API bool r_core_project_save_script(RCore *core, const char *file, int opts) {
 	}
 	if (opts & R_CORE_PRJ_META) {
 		r_cons_printf ("# meta\n");
-		r_meta_print_list_all (core->anal, R_META_TYPE_ANY, 1, NULL);
+		r_meta_print_list_all (core->anal, R_META_TYPE_ANY, 1, NULL, NULL);
 		flush (sb);
 		r_core_cmd (core, "fV*", 0);
 		flush (sb);
@@ -609,7 +609,7 @@ R_API bool r_core_project_save_script(RCore *core, const char *file, int opts) {
 	}
 	r_core_cmd (core, "wc*", 0);
 	if (opts & R_CORE_PRJ_ANAL_SEEK) {
-		r_cons_printf ("# seek\n" "s 0x%08" PFMT64x "\n", core->offset);
+		r_cons_printf ("# seek\n" "s 0x%08" PFMT64x "\n", core->addr);
 		flush (sb);
 	}
 	r_cons_singleton ()->context->is_interactive = true;
@@ -709,7 +709,7 @@ R_API bool r_core_project_save(RCore *core, const char *prj_name) {
 
 	r_config_set (core->config, "prj.name", prj_name);
 	if (!r_core_project_save_script (core, script_path, R_CORE_PRJ_ALL)) {
-		R_LOG_ERROR ("Cannot open '%s' for writing", prj_name);
+		R_LOG_ERROR ("Cannot open '%s' project name", prj_name);
 		ret = false;
 		r_config_set (core->config, "prj.name", "");
 	}
@@ -798,7 +798,7 @@ R_API char *r_core_project_notes_file(RCore *core, const char *prj_name) {
 }
 
 R_API bool r_core_project_is_dirty(RCore *core) {
-	return !R_IS_DIRTY (core->config) && !R_IS_DIRTY (core->anal) && !R_IS_DIRTY (core->flags);
+	return !R_DIRTY_CHECK (core->config) && !R_DIRTY_CHECK (core->anal) && !R_DIRTY_CHECK (core->flags);
 }
 
 R_API void r_core_project_undirty(RCore *core) {

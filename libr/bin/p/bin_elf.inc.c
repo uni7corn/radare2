@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2024 - nibble, pancake, luctielen */
+/* radare - LGPL - Copyright 2009-2025 - nibble, pancake, luctielen */
 
 #define R_LOG_ORIGIN "bin.elf"
 
@@ -61,19 +61,7 @@ static bool load(RBinFile *bf, RBuffer *buf, ut64 loadaddr) {
 }
 
 static void destroy(RBinFile *bf) {
-	ELFOBJ* eo = bf->bo->bin_obj;
-	if (eo && eo->imports_by_ord) {
-		int i;
-		for (i = 0; i < eo->imports_by_ord_size; i++) {
-			RBinImport *imp = eo->imports_by_ord[i];
-			if (imp) {
-				r_bin_import_free (eo->imports_by_ord[i]);
-				eo->imports_by_ord[i] = NULL;
-			}
-		}
-		R_FREE (eo->imports_by_ord);
-	}
-	Elf_(free) (eo);
+	Elf_(free) ((ELFOBJ*)bf->bo->bin_obj);
 }
 
 static ut64 baddr(RBinFile *bf) {
@@ -696,6 +684,10 @@ static RBinReloc *reloc_convert(ELFOBJ* eo, RBinElfReloc *rel, ut64 got_addr) {
 			break;
 		}
 		break;
+	case EM_LOONGARCH:
+		// 3 and 5 :: switch (rel->type) {
+		ADD (32, 0);
+		break;
 	case EM_MIPS:
 		ADD (32, 0);
 		break;
@@ -716,9 +708,12 @@ static RBinReloc *reloc_convert(ELFOBJ* eo, RBinElfReloc *rel, ut64 got_addr) {
 
 static RList* relocs(RBinFile *bf) {
 	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->bin_obj, NULL);
-	RList *ret = NULL;
 	ELFOBJ *eo = bf->bo->bin_obj;
-	if (!(ret = r_list_newf (free))) {
+	if (eo->relocs_list) {
+		return eo->relocs_list;
+	}
+	RList *ret = r_list_newf (free);
+	if (!ret) {
 		return NULL;
 	}
 
@@ -766,7 +761,9 @@ static RList* relocs(RBinFile *bf) {
 		}
 	}
 	ht_up_free (reloc_ht);
-	return ret;
+	eo->relocs_list = ret;
+	ret->free = NULL; // already freed in the hashtable
+	return r_list_clone (eo->relocs_list, NULL);
 }
 
 static void _patch_reloc(ELFOBJ *bo, ut16 e_machine, RIOBind *iob, RBinElfReloc *rel, ut64 S, ut64 B, ut64 L) {
@@ -788,11 +785,10 @@ static void _patch_reloc(ELFOBJ *bo, ut16 e_machine, RIOBind *iob, RBinElfReloc 
 	case EM_ARM:
 		if (!rel->sym && rel->mode == DT_REL) {
 			iob->read_at (iob->io, rel->rva, buf, 4);
-			V = r_read_ble32 (buf, bo->endian);
 		} else {
 			V = S + A;
+			r_write_ble32 (buf, V, bo->endian);
 		}
-		r_write_le32 (buf, V);
 		iob->overlay_write_at (iob->io, rel->rva, buf, 4);
 		break;
 	case EM_AARCH64:
@@ -1183,6 +1179,7 @@ static RBinInfo* info(RBinFile *bf) {
 		ret->rpath = strdup ("NONE");
 	}
 	if (!(str = Elf_(get_file_type) (obj))) {
+		free (ret->rpath);
 		free (ret);
 		return NULL;
 	}
@@ -1191,26 +1188,38 @@ static RBinInfo* info(RBinFile *bf) {
 	ret->has_lit = true;
 	ret->has_sanitizers = has_sanitizers (bf);
 	if (!(str = Elf_(get_elf_class) (obj))) {
+		free (ret->rpath);
 		free (ret);
 		return NULL;
 	}
 	ret->bclass = str;
 	if (!(str = Elf_(get_osabi_name) (obj))) {
+		free (ret->rpath);
+		free (ret->type);
 		free (ret);
 		return NULL;
 	}
 	ret->os = str;
 	if (!(str = Elf_(get_osabi_name) (obj))) {
+		free (ret->rpath);
+		free (ret->type);
 		free (ret);
 		return NULL;
 	}
 	ret->subsystem = str;
 	if (!(str = Elf_(get_machine_name) (obj))) {
+		free (ret->rpath);
+		free (ret->type);
+		free (ret->os);
 		free (ret);
 		return NULL;
 	}
 	ret->machine = str;
 	if (!(str = Elf_(get_arch) (obj))) {
+		free (ret->subsystem);
+		free (ret->rpath);
+		free (ret->type);
+		free (ret->os);
 		free (ret);
 		return NULL;
 	}

@@ -136,18 +136,17 @@ R_API int r_str_bits(char *strout, const ut8 *buf, int len, const char *bitz) {
 	return j;
 }
 
-R_API const char *r_str_sysbits(const int v) {
+R_API const char *r_str_sysbits(const RSysBits v) {
 	switch (v) {
-	case R_SYS_BITS_4: return "4";
-	case R_SYS_BITS_8: return "8";
-	case R_SYS_BITS_4 | R_SYS_BITS_8: return "4,8";
-	case R_SYS_BITS_16: return "16";
-	case R_SYS_BITS_27: return "27";
-	case R_SYS_BITS_32: return "32";
-	case R_SYS_BITS_64: return "64";
-	case R_SYS_BITS_16 | R_SYS_BITS_32: return "16,32";
-	case R_SYS_BITS_16 | R_SYS_BITS_32 | R_SYS_BITS_64: return "16,32,64";
-	case R_SYS_BITS_32 | R_SYS_BITS_64: return "32,64";
+	case R_SYS_BITS_PACK (4): return "4";
+	case R_SYS_BITS_PACK (8): return "8";
+	case R_SYS_BITS_PACK (16): return "16";
+	case R_SYS_BITS_PACK (32): return "32";
+	case R_SYS_BITS_PACK (64): return "64";
+	case R_SYS_BITS_PACK2 (4, 8): return "4,8";
+	case R_SYS_BITS_PACK2 (16, 64): return "16,32";
+	case R_SYS_BITS_PACK2 (32, 64): return "32,64";
+	case R_SYS_BITS_PACK3 (16, 32, 64): return "16,32,64";
 	}
 	return "?";
 }
@@ -211,12 +210,12 @@ R_API int r_str_rwx(const char *str) {
 		ret |= strchr (str, 'm')? 16: 0;
 		ret |= strchr (str, 'r')? 4: 0;
 		ret |= strchr (str, 'w')? 2: 0;
-		ret |= strchr (str, 'x') ? 1 : 0;
-		if (*str && ret == 0 && strchr (str, '-')) {
+		ret |= strchr (str, 'x') ? 1: 0;
+		if (!ret && strcmp (str, "---")) {
 			ret = -1;
 		}
 	} else if (ret < 0 || ret >= R_ARRAY_SIZE (rwxstr)) {
-		ret = 0;
+		ret = -1;
 	}
 	return ret;
 }
@@ -248,7 +247,9 @@ R_API R_MUSTUSE char *r_str_r2_prefix(const char *str) {
 	return r_str_newf ("%s%s%s", r_sys_prefix (NULL), R_SYS_DIR, str);
 }
 
-// Compute a 64 bit DJB hash of a string.
+// Compute a modified 64 bit DJB hash of a string
+// The fisrt addition is replaced by a xor for speed
+// See the XOR version in http://www.cse.yorku.ca/~oz/hash.html
 R_API ut64 r_str_hash64(const char *s) {
 	ut64 len, h = 5381;
 	if (!s) {
@@ -260,14 +261,14 @@ R_API ut64 r_str_hash64(const char *s) {
 	return h;
 }
 
-// Compute a 32bit DJB hash of a string.
+// Compute a modified 32bit DJB hash of a string.
 R_API ut32 r_str_hash(const char *s) {
 	return (ut32) r_str_hash64 (s);
 }
 
 R_API int r_str_delta(char *p, char a, char b) {
-	char *_a = strchr (p, a);
-	char *_b = strchr (p, b);
+	const char *_a = strchr (p, a);
+	const char *_b = strchr (p, b);
 	return (!_a || !_b)? 0 : (_a - _b);
 }
 
@@ -318,10 +319,9 @@ R_API int r_str_word_set0(char *str) {
 				*p = '\0';
 				// FIX: i++;
 				continue;
-			} else {
-				quote = 1;
-				memmove (p, p + 1, strlen (p + 1) + 1);
 			}
+			quote = 1;
+			memmove (p, p + 1, strlen (p + 1) + 1);
 		}
 		if (quote) {
 			continue;
@@ -540,7 +540,6 @@ R_API const char *r_str_lchr(const char *str, char chr) {
 	return NULL;
 }
 
-#if R2_600
 R_API char *r_str_lstr(const char *s, const char *sub) {
 	if (!s || !sub) {
 		return NULL;  // Handle null input
@@ -563,7 +562,6 @@ R_API char *r_str_lstr(const char *s, const char *sub) {
 	}
 	return NULL;
 }
-#endif
 
 /* find the last char chr in the substring str[start:end] with end not included */
 R_API const char *r_sub_str_lchr(const char *str, int start, int end, char chr) {
@@ -1100,9 +1098,6 @@ R_API void r_str_replace_in(char *str, ut32 sz, const char *key, const char *val
 	R_RETURN_IF_FAIL (str && key && val);
 	char *heaped = r_str_replace (strdup (str), key, val, g);
 	if (heaped) {
-		if (sz < 0) {
-			sz = strlen (key);
-		}
 		r_str_ncpy (str, heaped, sz);
 		free (heaped);
 	}
@@ -2900,7 +2895,7 @@ R_API void r_str_range_foreach(const char *r, RStrRangeCallback cb, void *u) {
 					cb (u, from);
 				}
 			} else {
-				fprintf (stderr, "Invalid range\n");
+				R_LOG_ERROR ("Invalid range");
 			}
 			for (r++; *r && *r != ',' && *r != '-'; r++) {
 				;
@@ -2941,7 +2936,7 @@ R_API bool r_str_range_in(const char *r, ut64 addr) {
 					return true;
 				}
 			} else {
-				fprintf (stderr, "Invalid range\n");
+				R_LOG_ERROR ("Invalid range");
 			}
 			for (r++; *r && *r != ',' && *r != '-'; r++) {
 				;
@@ -4124,24 +4119,25 @@ R_API bool r_str_startswith(const char *str, const char *needle) {
 	return !strncmp (str, needle, strlen (needle));
 }
 
-R_API void r_str_fixspaces(char *str) {
-	// add space after commas
-	char *os = strdup (str);
-	int i, j;
-	for (i = j = 0; os[i]; i++,j++) {
-		char ch = os[i];
-		str[j] = ch;
+// add space after commas
+R_API char *r_str_fixspaces(char *str) {
+	R_RETURN_VAL_IF_FAIL (str, NULL);
+	RStrBuf *sb = r_strbuf_new ("");
+	int i;
+	for (i = 0; str[i]; i++) {
+		const char ch = str[i];
+		r_strbuf_append_n (sb, &ch, 1);
 		if (ch == ',') {
-			j++;
-			str[j] = ' ';
-			while (os[i + 1] == ' ') {
+			r_strbuf_append (sb, " ");
+			while (str[i + 1] == ' ') {
 				i++;
 			}
 		}
 	}
-	str[j] = 0;
-	free (os);
-	r_str_trim_tail (str);
+	char *newstr = r_strbuf_drain (sb);
+	r_str_trim_tail (newstr);
+	free (str);
+	return newstr;
 }
 
 R_API char *r_str_tok_r(char *str, const char *delim, char **save_ptr) {
@@ -4178,4 +4174,181 @@ R_API R_MUSTUSE char *r_str_after(char *s, char c) {
 		}
 	}
 	return NULL;
+}
+
+static void fill_line(RStrBuf *sb, int maxcol) {
+	int i;
+	if (maxcol < 1) {
+		return;
+	}
+	for (i = 0; i < maxcol; i++) {
+		r_strbuf_append (sb, " ");
+	}
+	r_strbuf_append (sb, Color_RESET_BG);
+	r_strbuf_append (sb, Color_RESET);
+	r_strbuf_append (sb, "\n");
+}
+
+R_API char *r_str_md2txt(const char *page, bool usecolor) {
+	char *b = r_file_slurp (page, NULL);
+	RStrBuf *sb = r_strbuf_new ("");
+	int col = 0;
+	const int maxcol = 75;
+	bool codeblock = false;
+	bool title = false;
+	bool codeblockline = false;
+	while (*b) {
+		int ch = *b;
+repeat:
+		switch (ch) {
+		case 10: // '\n'
+			if (codeblock || title) {
+				const int j = title? maxcol + 2: maxcol - 4;
+				if (usecolor) {
+					fill_line (sb, j - col);
+					if (title) {
+						r_strbuf_append (sb, Color_BLACK);
+						r_strbuf_append (sb, Color_BGBLUE);
+						fill_line (sb, maxcol + 4);
+					}
+				}
+				title = false;
+			}
+			col = 0;
+			if (usecolor) {
+				r_strbuf_append (sb, Color_RESET);
+			}
+			if (!codeblock) {
+				r_strbuf_append (sb, "\n");
+			}
+			if (codeblockline) {
+				codeblock = false;
+				codeblockline = false;
+			}
+			break;
+		case '\t':
+			if (col == 0) {
+				codeblock = true;
+				codeblockline = true;
+			} else {
+				r_strbuf_append (sb, "  ");
+			}
+			break;
+		case 13:
+			// ignore
+			break;
+		default:
+			if (col > maxcol) {
+				ch = 10;
+				if (*b == ' ') {
+					b++;
+				} else {
+					if (codeblock) {
+						col = 1;
+						// nothing
+					} else {
+						r_strbuf_append (sb, "-");
+					}
+				}
+				b--;
+				goto repeat;
+			}
+			if (col == 0) {
+				if (r_str_startswith (b, "```")) {
+					while (*b && *b != '\n') {
+						b++;
+					}
+					codeblock = !codeblock;
+					if (!codeblock) {
+						r_strbuf_append (sb, Color_RESET_BG);
+					}
+					continue;
+				}
+				if (!codeblock && r_str_startswith (b, "###")) {
+					if (usecolor) {
+						r_strbuf_append (sb, Color_BLACK);
+						r_strbuf_append (sb, Color_BGBLUE);
+						fill_line (sb, maxcol + 4);
+						r_strbuf_append (sb, Color_BLUE);
+						r_strbuf_append (sb, Color_BGCYAN);
+					}
+					r_strbuf_append (sb, "  ");
+					b += 3;
+					title = true;
+				} else if (!codeblock && r_str_startswith (b, "##")) {
+					if (usecolor) {
+						r_strbuf_append (sb, Color_BLACK);
+						r_strbuf_append (sb, Color_BGBLUE);
+						fill_line (sb, maxcol + 4);
+						r_strbuf_append (sb, Color_BLACK);
+						r_strbuf_append (sb, Color_BGBLUE);
+					}
+					r_strbuf_append (sb, "  ");
+					ch = ' ';
+					b += 2;
+					title = true;
+				} else if (!codeblock && r_str_startswith (b, "#")) {
+					RStrBuf *sb2 = r_strbuf_new ("");
+					while (*b) {
+						if (*b == '\n') {
+							b++;
+							break;
+						}
+						r_strbuf_appendf (sb2, "%c", *b);
+						b++;
+					}
+					char *sb2s = r_strbuf_drain (sb2);
+					char *sb2ss = r_str_ss (sb2s, 0, 0);
+					char *p = sb2ss;
+					char *nextlist = strstr (p, "\n");
+					if (usecolor) {
+						r_strbuf_append (sb, Color_BLACK);
+						r_strbuf_append (sb, Color_BGGREEN);
+					}
+					while (nextlist) {
+						char *line = r_str_ndup (p, nextlist - p);
+						r_strbuf_appendf (sb, "%s", line);
+						int col = strlen (line);
+						int i;
+						for (i = col; i < maxcol + 1; i++) {
+							r_strbuf_append (sb, " ");
+						}
+						if (usecolor) {
+							r_strbuf_append (sb, "  ");
+							r_strbuf_append (sb, " "Color_RESET_BG""Color_RESET"\n"Color_BGGREEN""Color_BLACK);
+						} else {
+							r_strbuf_append (sb, "   \n");
+						}
+						p = nextlist + 1;
+						nextlist = strstr (p, "\n");
+					}
+					//r_strbuf_append (sb, sb2ss);
+					free (sb2ss);
+					free (sb2s);
+					if (usecolor) {
+						r_strbuf_append (sb, Color_RESET_BG""Color_RESET"\n");
+					} else {
+						r_strbuf_append (sb, "\n");
+					}
+					title = false;
+					break;
+				} else {
+					if (codeblock) {
+						if (usecolor) {
+							r_strbuf_append (sb, "  "Color_BGYELLOW" "Color_BLACK);
+						} else {
+							r_strbuf_append (sb, "   ");
+						}
+					} else {
+						r_strbuf_append (sb, "  ");
+					}
+				}
+			}
+			col ++;
+			r_strbuf_appendf (sb, "%c", ch);
+			break;
+		}
+		b++;
+	}
+	return r_strbuf_drain (sb);
 }

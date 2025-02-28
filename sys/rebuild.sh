@@ -73,7 +73,7 @@ RebuildCapstone() {
 }
 
 RebuildSdb() {
-	Rebuild shlr/sdb
+	Rebuild subprojects/sdb
 	Rebuild libr/util
 }
 
@@ -85,6 +85,11 @@ RebuildFs() {
 RebuildBin() {
 	Rebuild libr/bin
 	Rebuild libr/core
+}
+
+RebuildAr() {
+	Rebuild shlr/ar
+	Rebuild libr/io
 }
 
 RebuildGdb() {
@@ -113,6 +118,7 @@ case "$1" in
 grub|fs)RebuildFs; ;;
 bin)    RebuildBin ; ;;
 gdb)    RebuildGdb ; ;;
+ar)     RebuildAr ; ;;
 winkd)  RebuildWinkd ; ;;
 sdb)    RebuildSdb ; ;;
 spp)    RebuildSpp ; ;;

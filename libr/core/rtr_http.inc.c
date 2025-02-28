@@ -174,7 +174,7 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 	eprintf ("r2 r2web://%s:%s/cmd/\n", host, port);
 	core->http_up = true;
 
-	ut64 newoff, origoff = core->offset;
+	ut64 newoff, origoff = core->addr;
 	int newblksz, origblksz = core->blocksize;
 	ut8 *newblk, *origblk = core->block;
 
@@ -199,11 +199,11 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 		r_config_set_b (origcfg, "scr.interactive", r_config_get_b (origcfg, "scr.interactive"));
 #endif
 
-		newoff = core->offset;
+		newoff = core->addr;
 		newblk = core->block;
 		newblksz = core->blocksize;
 
-		core->offset = origoff;
+		core->addr = origoff;
 		core->block = origblk;
 		core->blocksize = origblksz;
 
@@ -249,10 +249,10 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 			}
 		}
 
-		origoff = core->offset;
+		origoff = core->addr;
 		origblk = core->block;
 		origblksz = core->blocksize;
-		core->offset = newoff;
+		core->addr = newoff;
 		core->block = newblk;
 		core->blocksize = newblksz;
 		/* set environment */
@@ -384,7 +384,7 @@ static int r_core_rtr_http_run(RCore *core, int launch, int browse, const char *
 							int len; // do remote http query and proxy response
 							char *res, *bar = r_str_newf ("%s/%s", httpcmd, cmd);
 							bed = r_cons_sleep_begin ();
-							res = r_socket_http_get (bar, NULL, &len);
+							res = r_socket_http_get (bar, NULL, NULL, &len);
 							r_cons_sleep_end (bed);
 							if (res) {
 								res[len] = 0;

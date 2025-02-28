@@ -180,16 +180,13 @@ R_API int r_list_join(RList *list1, RList *list2) {
 	return 1;
 }
 
-R_API RList *r_list_new(void) {
+R_API R_NONNULL RList *r_list_new(void) {
 	RList *list = R_NEW0 (RList);
-	if (!list) {
-		return NULL;
-	}
 	r_list_init (list);
 	return list;
 }
 
-R_API RList *r_list_newf(RListFree f) {
+R_API R_NONNULL RList *r_list_newf(RListFree f) {
 	RList *l = r_list_new ();
 	if (l) {
 		l->free = f;
@@ -197,21 +194,16 @@ R_API RList *r_list_newf(RListFree f) {
 	return l;
 }
 
-R_API RListIter *r_list_item_new(void *data) {
+R_API R_NONNULL RListIter *r_list_item_new(void *data) {
 	RListIter *item = R_NEW0 (RListIter);
-	if (item) {
-		item->data = data;
-	}
+	item->data = data;
 	return item;
 }
 
-R_API RListIter *r_list_append(RList *list, void *data) {
+R_API R_NONNULL RListIter *r_list_append(RList *list, void *data) {
 	R_RETURN_VAL_IF_FAIL (list, NULL);
 
 	RListIter *item = r_list_item_new (data);
-	if (!item) {
-		return NULL;
-	}
 	if (list->tail) {
 		list->tail->n = item;
 	}
@@ -343,18 +335,6 @@ R_API int r_list_del_n(RList *list, int n) {
 	return false;
 }
 
-R_DEPRECATE R_API void *r_list_get_top(const RList *list) {
-	R_RETURN_VAL_IF_FAIL (list, NULL);
-
-	return list->tail ? list->tail->data : NULL;
-}
-
-R_DEPRECATE R_API void *r_list_get_bottom(const RList *list) {
-	R_RETURN_VAL_IF_FAIL (list, NULL);
-
-	return list->head ? list->head->data : NULL;
-}
-
 // Moves an iter to the top(tail) of the list
 // There is an underlying assumption here, that iter is an RListIter of this RList
 R_API void r_list_iter_to_top(RList *list, RListIter *iter) {
@@ -391,15 +371,12 @@ R_API void r_list_reverse(RList *list) {
 }
 
 R_API RList *r_list_clone(const RList *list, RListClone clone) {
+	R_RETURN_VAL_IF_FAIL (list, NULL);
+
 	RListIter *iter;
 	void *data;
 
-	R_RETURN_VAL_IF_FAIL (list, NULL);
-
 	RList *l = r_list_new ();
-	if (!l) {
-		return NULL;
-	}
 	if (clone) {
 		l->free = list->free;
 		r_list_foreach (list, iter, data) {
@@ -416,18 +393,15 @@ R_API RList *r_list_clone(const RList *list, RListClone clone) {
 }
 
 R_API RListIter *r_list_add_sorted(RList *list, void *data, RListComparator cmp) {
-	RListIter *it, *item = NULL;
-
 	R_RETURN_VAL_IF_FAIL (list && data && cmp, NULL);
+	RListIter *it;
+	RListIter *item = NULL;
 
 	for (it = list->head; it && it->data && cmp (data, it->data) > 0; it = it->n) {
 		;
 	}
 	if (it) {
 		item = R_NEW0 (RListIter);
-		if (!item) {
-			return NULL;
-		}
 		item->n = it;
 		item->p = it->p;
 		item->data = data;
@@ -446,10 +420,10 @@ R_API RListIter *r_list_add_sorted(RList *list, void *data, RListComparator cmp)
 }
 
 R_API int r_list_set_n(RList *list, int n, void *p) {
+	R_RETURN_VAL_IF_FAIL (list, false);
 	RListIter *it;
 	int i;
 
-	R_RETURN_VAL_IF_FAIL (list, false);
 	for (it = list->head, i = 0; it ; it = it->n, i++) {
 		if (i == n) {
 			if (list->free) {
@@ -463,7 +437,6 @@ R_API int r_list_set_n(RList *list, int n, void *p) {
 	return false;
 }
 
-#if R2_USE_NEW_ABI
 R_API RListIter *r_list_get_nth(const RList *list, int n) {
 	R_RETURN_VAL_IF_FAIL (list, NULL);
 	RListIter *it;
@@ -475,7 +448,6 @@ R_API RListIter *r_list_get_nth(const RList *list, int n) {
 	}
 	return NULL;
 }
-#endif
 
 R_API void *r_list_get_n(const RList *list, int n) {
 	RListIter *it = r_list_get_nth (list, n);
@@ -536,8 +508,12 @@ static RListIter *_merge(RListIter *first, RListIter *second, RListComparator cm
 			result = result->n;
 		}
 	}
-	head->p = NULL;
-	next->n = NULL;
+	if (head) {
+		head->p = NULL;
+	}
+	if (next) {
+		next->n = NULL;
+	}
 	return head;
 }
 

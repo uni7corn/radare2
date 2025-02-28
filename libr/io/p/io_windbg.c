@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2020-2024 - GustavoLCR */
+/* radare - LGPL - Copyright 2020-2025 - GustavoLCR */
 
 #define INITGUID
 #include <r_core.h>
@@ -342,7 +342,7 @@ fail:
 	return NULL;
 }
 
-static bool windbg_init(void) {
+static bool windbg_init(RIODesc *desc) {
 	if (w32_DebugCreate && w32_DebugConnectWide) {
 		return true;
 	}
@@ -398,7 +398,7 @@ static RIODesc *windbg_open(RIO *io, const char *uri, int perm, int mode) {
 	if (!windbg_check (io, uri, 0)) {
 		return NULL;
 	}
-	if (!windbg_init ()) {
+	if (!windbg_init (NULL)) {
 		return NULL;
 	}
 	HRESULT hr = E_FAIL;
@@ -680,7 +680,6 @@ RIOPlugin r_io_plugin_windbg = {
 	},
 	.uris = WINDBGURI,
 	.isdbg = true,
-	.init = windbg_init,
 	.open = windbg_open,
 	.seek = windbg_lseek,
 	.read = windbg_read,

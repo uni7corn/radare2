@@ -164,7 +164,7 @@ void __magic_file_badread(RMagic *ms) {
 	__magic_file_error (ms, errno, "error reading");
 }
 
-int __magic_file_buffer(RMagic *ms, int fd, const char *inname, const void *buf, size_t nb) {
+R_IPI int __magic_file_buffer(RMagic *ms, int fd, const char *inname, const void *buf, size_t nb) {
 	int mime, m = 0;
 	if (!ms) {
 		return -1;
@@ -322,7 +322,8 @@ const char *__magic_file_getbuffer(RMagic *ms) {
 
 int __magic_file_check_mem(RMagic *ms, unsigned int level) {
 	if (level >= ms->c.len) {
-		size_t len = (ms->c.len += 20) * sizeof (*ms->c.li);
+		ms->c.len = level + 20;
+		size_t len = ms->c.len * sizeof (*ms->c.li);
 		ms->c.li = (!ms->c.li) ? malloc (len) :
 		    realloc (ms->c.li, len);
 		if (!ms->c.li) {

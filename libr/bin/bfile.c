@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2009-2024 - pancake, nibble, dso */
+/* radare2 - LGPL - Copyright 2009-2025 - pancake, nibble, dso */
 
 #include <r_bin.h>
 #include <r_hash.h>
@@ -45,7 +45,7 @@ static void print_string(RBinFile *bf, RBinString *string, int raw, PJ *pj) {
 	const char *section_name = s ? s->name : "";
 	const char *type_string = r_bin_string_type (string->type);
 	ut64 vaddr = r_bin_get_vaddr (bin, string->paddr, string->vaddr);
-	ut64 addr = vaddr;
+	ut64 addr = vaddr; // bf->bo? vaddr: string->vaddr;
 
 	// If raw string dump mode, use printf to dump directly to stdout.
 	//  PrintfCallback temp = io->cb_printf;
@@ -161,12 +161,7 @@ static int string_scan_range(RList *list, RBinFile *bf, int min, const ut64 from
 			int outlen = len * 4;
 			ut8 *out = calloc (len, 4);
 			if (out) {
-#if R2_USE_NEW_ABI
-				int res = r_charset_encode_str (ch, out, outlen, buf, len, false);
-#else
-				int res = r_charset_encode_str (ch, out, outlen, buf, len);
-#endif
-				int i;
+				int i, res = r_charset_encode_str (ch, out, outlen, buf, len, false);
 				// TODO unknown chars should be translated to null bytes
 				for (i = 0; i < res; i++) {
 					if (out[i] == '?') {
@@ -412,8 +407,10 @@ static int string_scan_range(RList *list, RBinFile *bf, int min, const ut64 from
 				}
 			}
 			ut64 baddr = bf->loadaddr && bf->bo? bf->bo->baddr: bf->loadaddr;
+			// ut64 baddr = bf->bo? bf->bo->baddr: bf->loadaddr;
+			ut64 maddr = bf->bo? 0: bf->loadaddr;
+			bs->vaddr = str_start - pdelta + vdelta + baddr + maddr;
 			bs->paddr = str_start + baddr;
-			bs->vaddr = str_start - pdelta + vdelta + baddr;
 			bs->string = r_strbuf_drain (sb);
 			sb = r_strbuf_new ("");
 			if (strings_nofp) {
@@ -491,6 +488,11 @@ static void get_strings_range(RBinFile *bf, RList *list, int min, int raw, bool 
 				}
 			}
 		}
+		if (!bf->bo) {
+			// use laddr instead of baddr if no bin object is loaded
+			const ut64 binLaddr = cb->cfgGetI (cb->core, "bin.laddr");
+			bf->loadaddr = binLaddr;
+		}
 	}
 	if (raw != 2) {
 		ut64 size = to - from;
@@ -521,30 +523,227 @@ static void get_strings_range(RBinFile *bf, RList *list, int min, int raw, bool 
 	string_scan_range (list, bf, min, from, to, type, raw, section);
 }
 
-R_IPI RBinFile *r_bin_file_new(RBin *bin, const char *file, ut64 file_sz, int rawstr, int fd, const char *xtrname, Sdb *sdb, bool steal_ptr) {
+/////////////////////////////
+/// ^move into addrline.c ///
+/////////////////////////////
+
+typedef struct {
+	RList *list;
+	RUStrpool *pool;
+#if 0
+	RBloom *bloomSet;
+	RBloom *bloomGet;
+#endif
+	HtUP *ht;
+} AddrLineStore;
+
+static bool al_add(RBinAddrLineStore *als, RBinDbgItem item) {
+	AddrLineStore *store = als->storage;
+	als->used = true;
+	RBinDbgItemInternal *di;
+#if 0
+	RListIter *iter;
+	if (r_bloom_check (store->bloomGet, &item.addr, sizeof (item.addr))) {
+#if 0
+		if (ht_up_find (store->ht, item.addr, NULL)) {
+			return false;
+		}
+#endif
+		/// XXX super slow but necessary
+		r_list_foreach (store->list, iter, di) {
+			if (item.addr == di->addr && item.line == di->line) {
+				// R_LOG_WARN ("FAIL %llx %s %d %d", item.addr, item.file, item.line, item.column);
+				return false;
+			}
+		}
+	}
+	// R_LOG_WARN ("ADD %llx %s %d %d", item.addr, item.file, item.line, item.column);
+#else
+	RBinDbgItemInternal *hitem = ht_up_find (store->ht, item.addr, NULL);
+	if (hitem && hitem->line == item.line) {
+		return false;
+	}
+#endif
+	di = R_NEW0 (RBinDbgItemInternal);
+	di->addr = item.addr;
+	di->line = item.line;
+	di->colu = item.column;
+	di->file = item.file ? r_ustrpool_add (store->pool, item.file) : UT32_MAX;
+	di->path = item.path ? r_ustrpool_add (store->pool, item.path) : UT32_MAX;
+#if 0
+	r_bloom_add (store->bloomSet, &item, sizeof (item));
+	r_bloom_add (store->bloomGet, &item.addr, sizeof (item.addr));
+#endif
+	ht_up_insert (store->ht, di->addr, di);
+	r_list_append (store->list, di);
+	return true;
+}
+
+static bool al_add_cu(RBinAddrLineStore *als, RBinDbgItem item) {
+	AddrLineStore *store = als->storage;
+	// TODO: add storage for the compilation units here
+	// we are just storing the filename in the stringpool for `idx` purposes
+	if (item.file) {
+		als->used = true;
+		r_ustrpool_add (store->pool, item.file);
+	}
+	return true;
+}
+
+static void al_reset(RBinAddrLineStore *als) {
+	AddrLineStore *store = als->storage;
+	r_list_free (store->list);
+	store->list = r_list_newf (free);
+	r_ustrpool_free (store->pool);
+	store->pool = r_ustrpool_new ();
+	ht_up_free (store->ht);
+	store->ht = ht_up_new0 ();
+#if 0
+	r_bloom_reset (store->bloomGet);
+	r_bloom_reset (store->bloomSet);
+#endif
+}
+
+static RBinDbgItem* dbgitem_from_internal(RBinAddrLineStore *als, RBinDbgItemInternal *item) {
+	AddrLineStore *store = als->storage;
+	RBinDbgItem *di = R_NEW0 (RBinDbgItem);
+	di->addr = item->addr;
+	di->line = item->line;
+	di->column = item->colu;
+	di->file = r_ustrpool_get_nth (store->pool, item->file);
+	if (!di->file) {
+		di->file = "?";
+	}
+	di->path = r_ustrpool_get_nth (store->pool, item->path);
+	if (!di->path) {
+		di->path = "?";
+	}
+	return di;
+}
+
+static RList *al_files(RBinAddrLineStore *als) {
+	AddrLineStore *store = als->storage;
+	RList *files = r_list_newf (free);
+	int i = 0;
+	for (i = 0; true; i++) {
+		char *n = r_ustrpool_get_nth (store->pool, i);
+		if (!n) {
+			break;
+		}
+		r_list_append (files, strdup (n));
+	}
+	return files;
+}
+
+static void al_foreach(RBinAddrLineStore *als, RBinDbgInfoCallback cb, void *user) {
+	AddrLineStore *store = als->storage;
+
+	RListIter *iter;
+	RBinDbgItemInternal *item;
+	r_list_foreach (store->list, iter, item) {
+		RBinDbgItem *di = dbgitem_from_internal (als, item);
+		bool go_on = cb (user, di);
+		r_bin_addrline_free (di);
+		if (!go_on) {
+			break;
+		}
+	}
+}
+
+static void al_del(RBinAddrLineStore *als, ut64 addr) {
+	AddrLineStore *store = als->storage;
+
+	RListIter *iter;
+	RBinDbgItemInternal *item;
+	r_list_foreach (store->list, iter, item) {
+		if (item->addr == addr) {
+			r_list_delete (store->list, iter);
+			break;
+		}
+	}
+}
+
+static RBinDbgItem* al_get(RBinAddrLineStore *als, ut64 addr) {
+	AddrLineStore *store = als->storage;
+#if 0
+	if (!r_bloom_check (store->bloomGet, &addr, sizeof (addr))) {
+		return NULL;
+	}
+#endif
+#if 1
+	RBinDbgItemInternal *item = ht_up_find (store->ht, addr, NULL);
+	if (item) {
+		return dbgitem_from_internal (als, item);
+	}
+#else
+	RListIter *iter;
+	RBinDbgItemInternal *item;
+	R_LOG_DEBUG ("ITEMS %d / %d", store->pool->count, r_list_length (store->list));
+	r_list_foreach (store->list, iter, item) {
+		if (item->addr == addr) {
+			return dbgitem_from_internal (als, item);
+		}
+	}
+#endif
+	return NULL;
+}
+
+static void addrline_store_init(RBinAddrLineStore *b) {
+	AddrLineStore *als = R_NEW0 (AddrLineStore);
+	als->ht = ht_up_new0 ();
+	als->list = r_list_newf (free);
+	als->pool = r_ustrpool_new ();
+#if 0
+	als->bloomGet = r_bloom_new (9586, 7, NULL);
+	als->bloomSet = r_bloom_new (9586, 7, NULL);
+#endif
+	b->storage = (void*)als;
+	b->al_add = al_add;
+	b->al_add_cu = al_add_cu;
+	b->al_get = al_get;
+	b->al_del = al_del;
+	b->al_reset = al_reset;
+	b->al_foreach = al_foreach;
+	b->al_files = al_files;
+}
+
+static void addrline_store_fini(RBinAddrLineStore *als) {
+	AddrLineStore *store = als->storage;
+	if (store) {
+		ht_up_free (store->ht);
+#if 0
+		r_bloom_free (store->bloomSet);
+		r_bloom_free (store->bloomGet);
+#endif
+		r_list_free (store->list);
+	}
+	free (als->storage);
+}
+//////////////////////////////////
+
+R_IPI RBinFile *r_bin_file_new(RBin *bin, const char *file, ut64 file_sz, RBinFileOptions *opt, Sdb *sdb, bool steal_ptr) {
 	ut32 bf_id;
 	if (!r_id_pool_grab_id (bin->ids->pool, &bf_id)) {
 		return NULL;
 	}
 	RBinFile *bf = R_NEW0 (RBinFile);
-	if (bf) {
-		bf->id = bf_id;
-		bf->rbin = bin;
-		bf->file = file ? strdup (file) : NULL;
-		bf->rawstr = rawstr;
-		bf->fd = fd;
-		bf->curxtr = xtrname ? r_bin_get_xtrplugin_by_name (bin, xtrname) : NULL;
-		bf->sdb = sdb;
-		if ((st64)file_sz < 0) {
-			file_sz = 1024 * 64;
-		}
-		bf->size = file_sz;
-		bf->xtr_data = r_list_newf ((RListFree)r_bin_xtrdata_free);
-		bf->xtr_obj = NULL;
-		bf->sdb = sdb_new0 ();
-		bf->sdb_addrinfo = sdb_new0 (); // ns (bf->sdb, "addrinfo", 1);
-		// bf->sdb_addrinfo->refs++;
+	bf->options = opt;
+	addrline_store_init (&bf->addrline);
+	bf->id = bf_id;
+	bf->rbin = bin;
+	bf->file = file ? strdup (file) : NULL;
+	bf->rawstr = opt->rawstr;
+	bf->fd = opt->fd;
+	bf->curxtr = opt->pluginname? r_bin_get_xtrplugin_by_name (bin, opt->pluginname) : NULL;
+	bf->sdb = sdb;
+	if ((st64)file_sz < 0) {
+		file_sz = 1024 * 64;
 	}
+	bf->size = file_sz;
+	bf->xtr_data = r_list_newf ((RListFree)r_bin_xtrdata_free);
+	bf->xtr_obj = NULL;
+	bf->sdb = sdb_new0 ();
+	bf->sdb_addrinfo = sdb_new0 ();
 	return bf;
 }
 
@@ -618,16 +817,17 @@ static bool xtr_metadata_match(RBinXtrData *xtr_data, const char *arch, int bits
 	return bits == iter_bits && !strcmp (iter_arch, arch) && !xtr_data->loaded;
 }
 
-R_IPI RBinFile *r_bin_file_new_from_buffer(RBin *bin, const char *file, RBuffer *buf, int rawstr, ut64 baseaddr, ut64 loadaddr, int fd, const char *pluginname) {
+R_IPI RBinFile *r_bin_file_new_from_buffer(RBin *bin, const char *file, RBuffer *buf, RBinFileOptions *opt) {
+	// int rawstr, ut64 baseaddr, ut64 loadaddr, int fd, const char *pluginname) {
 	R_RETURN_VAL_IF_FAIL (bin && file && buf, NULL);
 
-	RBinFile *bf = r_bin_file_new (bin, file, r_buf_size (buf), rawstr, fd, pluginname, NULL, false);
+	RBinFile *bf = r_bin_file_new (bin, file, r_buf_size (buf), opt, NULL, false);
 	if (bf) {
 		RListIter *item = r_list_append (bin->binfiles, bf);
 		bf->buf = r_buf_ref (buf);
-		bf->user_baddr = baseaddr;
-		RBinPlugin *plugin = get_plugin_from_buffer (bin, bf, pluginname, bf->buf);
-		RBinObject *o = r_bin_object_new (bf, plugin, baseaddr, loadaddr, 0, r_buf_size (bf->buf));
+		bf->user_baddr = opt->baseaddr;
+		RBinPlugin *plugin = get_plugin_from_buffer (bin, bf, opt->pluginname, bf->buf);
+		RBinObject *o = r_bin_object_new (bf, plugin, opt->baseaddr, opt->loadaddr, 0, r_buf_size (bf->buf));
 		if (!o) {
 			r_list_delete (bin->binfiles, item);
 			return NULL;
@@ -809,6 +1009,7 @@ R_API void r_bin_file_free(void /*RBinFile*/ *_bf) {
 	if (plugin && plugin->destroy) {
 		plugin->destroy (bf);
 	}
+	addrline_store_fini (&bf->addrline);
 	r_buf_free (bf->buf);
 	if (bf->curxtr && bf->curxtr->destroy && bf->xtr_obj) {
 		bf->curxtr->free_xtr ((void *)(bf->xtr_obj));
@@ -834,7 +1035,12 @@ R_IPI RBinFile *r_bin_file_xtr_load(RBin *bin, RBinXtrPlugin *xtr, const char *f
 
 	RBinFile *bf = r_bin_file_find_by_name (bin, filename);
 	if (!bf) {
-		bf = r_bin_file_new (bin, filename, r_buf_size (buf), rawstr, fd, xtr->meta.name, bin->sdb, false);
+		// XXX. str_load should take the RBinFileOptions instead
+		RBinFileOptions *opt = R_NEW0 (RBinFileOptions);
+		opt->rawstr = rawstr;
+		opt->fd = fd;
+		opt->pluginname = xtr->meta.name;
+		bf = r_bin_file_new (bin, filename, r_buf_size (buf), opt, bin->sdb, false);
 		if (!bf) {
 			return NULL;
 		}
@@ -1227,4 +1433,6 @@ R_API void r_bin_file_merge(RBinFile *dst, RBinFile *src) {
 	sdb_merge (dst->bo->kv, src->bo->kv);
 	sdb_merge (dst->sdb_addrinfo, src->sdb_addrinfo);
 	sdb_merge (dst->sdb_info, src->sdb_info);
+	dst->addrline = src->addrline;
+	memset (&src->addrline, 0, sizeof (src->addrline));
 }
